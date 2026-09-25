@@ -46,13 +46,18 @@ class TempDatabaseTestCase(unittest.TestCase):
 
 
 def golden_batch_payload(batch_no: str = "20260901") -> dict[str, object]:
-    """用 1箱3罐 基准的结构构造一份合法请求体。"""
+    """用 1箱3罐 基准的结构构造一份合法请求体。
+
+    同时带上包装结构计划（每罐计划粒子数），因为 draft → collecting
+    要求计划完整；实际条码则来自基准文件。
+    """
 
     batch = parse_bytes(golden.read_bytes("1箱3罐.xml"))
     return {
         "batchNo": batch_no,
         "madeDate": batch.made_date,
         "validateDate": batch.validate_date,
+        "plannedParticleCounts": [len(can.particles) for can in batch.box.cans],
         "box": {
             "code": batch.box.code,
             "cans": [

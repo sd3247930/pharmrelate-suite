@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from ...schemas.batch import BatchStats, IssuePayload, XmlPreviewResponse
 from ...services.xml_builder import render
 from ...services.golden import sha256_of
-from ...domain.validation import has_blocking_issue, validate_batch
+from ...domain.validation import has_blocking_issue, validate_for_export
 from ..errors import ValidationFailedError
 from ...schemas.batch import BatchPayload
 
@@ -20,7 +20,7 @@ def preview(payload: BatchPayload) -> XmlPreviewResponse:
     """
 
     batch = payload.to_domain()
-    issues = validate_batch(batch)
+    issues = validate_for_export(batch)
     if has_blocking_issue(issues):
         raise ValidationFailedError(
             "数据校验未通过，无法生成 XML。",
@@ -44,7 +44,7 @@ def preview(payload: BatchPayload) -> XmlPreviewResponse:
 
 @router.post("/validate", summary="仅做校验，不生成 XML")
 def validate(payload: BatchPayload) -> dict[str, object]:
-    issues = validate_batch(payload.to_domain())
+    issues = validate_for_export(payload.to_domain())
     return {
         "ok": not has_blocking_issue(issues),
         "issues": [IssuePayload.from_domain(issue).model_dump(by_alias=True) for issue in issues],

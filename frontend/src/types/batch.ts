@@ -37,6 +37,13 @@ export interface BatchPayload {
   madeDate: string;
   validateDate: string;
   box: BoxPayload;
+  /**
+   * 包装结构计划：每罐计划粒子数，长度即计划罐数。
+   *
+   * 与 `box.cans` 严格区分：这里是界面 2 定的**计划**，扫码前就存在；
+   * `box.cans` 是界面 3 扫出来的**实际**数据。导出 XML 只用实际数据。
+   */
+  plannedParticleCounts?: number[];
 }
 
 export interface BatchStats {

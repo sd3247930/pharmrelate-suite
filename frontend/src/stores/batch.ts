@@ -33,6 +33,14 @@ function emptyCan(index: number): CanPayload {
   return { index, code: '', plannedParticleCount: 0, particles: [] };
 }
 
+/**
+ * 新建罐位时的默认计划粒子数。
+ *
+ * 取 400 而非上限 2500：真实的 `一箱一罐.xml` 就是 1 罐 400 粒，
+ * 默认值贴近实际才不会让操作员每次都手动改。
+ */
+const DEFAULT_PLANNED_PARTICLES = 400;
+
 export const useBatchStore = defineStore('batch', () => {
   // ---- 已落库批次的元数据 ----
   const batchId = ref('');
@@ -51,6 +59,12 @@ export const useBatchStore = defineStore('batch', () => {
   const boxCode = ref('');
   const cans = ref<CanPayload[]>([emptyCan(1)]);
 
+  /**
+   * 包装结构计划：每罐计划粒子数。与 `cans` 严格区分——
+   * `cans` 是扫到的实际数据，这里是界面 2 定的计划。
+   */
+  const plannedParticleCounts = ref<number[]>([]);
+
   const issues = ref<BatchIssue[]>([]);
   const preview = ref('');
   const previewSha256 = ref('');
@@ -60,9 +74,9 @@ export const useBatchStore = defineStore('batch', () => {
   const conflict = ref<BatchNoConflict | null>(null);
   const notice = ref('');
 
-  const canCount = computed(() => cans.value.length);
+  const canCount = computed(() => plannedParticleCounts.value.length);
   const plannedParticleTotal = computed(() =>
-    cans.value.reduce((sum, can) => sum + (can.plannedParticleCount || 0), 0),
+    plannedParticleCounts.value.reduce((sum, value) => sum + (value || 0), 0),
   );
   const overBatchLimit = computed(() => plannedParticleTotal.value > MAX_PARTICLES_PER_BATCH);
   const progressPercent = computed(() =>
@@ -83,18 +97,24 @@ export const useBatchStore = defineStore('batch', () => {
 
   function setCanCount(count: number): void {
     const clamped = Math.min(MAX_CANS, Math.max(MIN_CANS, Math.trunc(count) || MIN_CANS));
-    while (cans.value.length < clamped) cans.value.push(emptyCan(cans.value.length + 1));
-    while (cans.value.length > clamped) cans.value.pop();
-    cans.value.forEach((can, index) => {
-      can.index = index + 1;
-    });
+    const next = [...plannedParticleCounts.value];
+    while (next.length < clamped) next.push(DEFAULT_PLANNED_PARTICLES);
+    next.length = clamped;
+    plannedParticleCounts.value = next;
+  }
+
+  /** 进入包装结构页时确保至少有一个可编辑的罐位。 */
+  function ensurePlan(): void {
+    if (plannedParticleCounts.value.length === 0) {
+      plannedParticleCounts.value = [DEFAULT_PLANNED_PARTICLES];
+    }
   }
 
   function clampParticles(index: number): void {
-    const can = cans.value[index];
-    if (!can) return;
-    if (can.plannedParticleCount > MAX_PARTICLES_PER_CAN) can.plannedParticleCount = MAX_PARTICLES_PER_CAN;
-    if (can.plannedParticleCount < 0) can.plannedParticleCount = 0;
+    const value = plannedParticleCounts.value[index];
+    if (value === undefined) return;
+    const clamped = Math.min(MAX_PARTICLES_PER_CAN, Math.max(0, value || 0));
+    if (clamped !== value) plannedParticleCounts.value[index] = clamped;
   }
 
   function toPayload(): BatchPayload {
@@ -102,6 +122,7 @@ export const useBatchStore = defineStore('batch', () => {
       batchNo: batchNo.value.trim(),
       madeDate: madeDate.value,
       validateDate: validateDate.value,
+      plannedParticleCounts: [...plannedParticleCounts.value],
       box: {
         code: boxCode.value.trim(),
         cans: cans.value.map((can) => ({ ...can, particles: [...can.particles] })),
@@ -114,6 +135,7 @@ export const useBatchStore = defineStore('batch', () => {
     madeDate.value = payload.madeDate;
     validateDate.value = payload.validateDate;
     boxCode.value = payload.box.code;
+    plannedParticleCounts.value = [...(payload.plannedParticleCounts ?? [])];
     const loaded = payload.box.cans.map((can) => ({ ...can, particles: [...can.particles] }));
     // 后端对"还没生成包装结构"的草稿会返回 0 个罐；界面必须始终有可编辑的罐位，
     // 否则刚存完草稿就看不到罐数控件了。
@@ -204,6 +226,7 @@ export const useBatchStore = defineStore('batch', () => {
     validateDate.value = todayIso(30);
     boxCode.value = '';
     cans.value = [emptyCan(1)];
+    plannedParticleCounts.value = [];
     issues.value = [];
     preview.value = '';
     previewSha256.value = '';
@@ -400,6 +423,7 @@ export const useBatchStore = defineStore('batch', () => {
     validateDate,
     boxCode,
     cans,
+    plannedParticleCounts,
     issues,
     preview,
     previewSha256,
@@ -416,6 +440,7 @@ export const useBatchStore = defineStore('batch', () => {
     progressPercent,
     isNew,
     setCanCount,
+    ensurePlan,
     clampParticles,
     toPayload,
     loadFromPayload,

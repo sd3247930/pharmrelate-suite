@@ -167,6 +167,23 @@ CREATE VIEW IF NOT EXISTS v_particle AS
     SELECT * FROM code WHERE pack_layer = 1 AND deleted = 0;
 
 -- ---------------------------------------------------------------------------
+-- 包装结构计划
+--
+-- 界面 2 定的是"计划"（几罐、每罐几粒），界面 3 才产出"实际"（箱号/罐号/粒子码）。
+-- 两者必须分开存：
+--   - 计划在扫码之前就存在，而 code 表的 cur_code 不允许为空，
+--     所以计划没法用 code 行表达；
+--   - code 表只承载已经扫到的真实条码，这样"计划 vs 实际"的核对才有意义。
+-- code.planned_particle_count 保留为扫描时的冗余快照，便于单表核对。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS can_plan (
+    batch_id               TEXT NOT NULL REFERENCES batch (id) ON DELETE CASCADE,
+    can_index              INTEGER NOT NULL CHECK (can_index >= 1 AND can_index <= 5),
+    planned_particle_count INTEGER NOT NULL CHECK (planned_particle_count >= 1 AND planned_particle_count <= 2500),
+    PRIMARY KEY (batch_id, can_index)
+);
+
+-- ---------------------------------------------------------------------------
 -- 二期预留：操作日志与审计日志
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS oplog (

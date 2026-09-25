@@ -237,6 +237,8 @@ async function main() {
           batchNo: 'E2E-SEED-01',
           madeDate: '2026-09-23',
           validateDate: '2026-10-23',
+          // 计划与实际上分开：生成扫码网格要求计划完整
+          plannedParticleCounts: [1],
           box: {
             code: '80217619000000001003',
             cans: [

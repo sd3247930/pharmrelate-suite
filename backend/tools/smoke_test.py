@@ -91,6 +91,8 @@ def build_payload(batch_no: str, cans: list[dict[str, object]]) -> dict[str, obj
         "batchNo": batch_no,
         "madeDate": "2026-09-23",
         "validateDate": "2026-10-23",
+        # 计划与实际上分开：罐数与每罐粒子数属于计划，draft → collecting 要求计划完整
+        "plannedParticleCounts": [can["plannedParticleCount"] for can in cans],
         "box": {"code": "80217619000000001003", "cans": cans},
     }
 
@@ -232,8 +234,8 @@ def main() -> int:
         status, storage = get_json(f"{base}/api/system/storage")
         in_temp = isinstance(storage, dict) and data_dir.name in str(storage.get("databasePath", ""))
         check(
-            status == 200 and storage.get("schemaVersion") == "3" and in_temp,
-            "本地库落在用户数据目录且 schema 版本为 3",
+            status == 200 and storage.get("schemaVersion") == "4" and in_temp,
+            "本地库落在用户数据目录且 schema 版本为 4",
         )
 
         batch_id = created.get("id")

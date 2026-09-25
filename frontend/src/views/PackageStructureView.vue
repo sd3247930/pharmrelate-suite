@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { AlertTriangle, Box, ChevronRight, Cylinder, Lock, Minus, Plus } from 'lucide-vue-next';
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 
 import AppButton from '../components/AppButton.vue';
@@ -24,9 +24,20 @@ import {
 const router = useRouter();
 const batch = useBatchStore();
 
-const exceedCanLimit = computed(() => batch.cans.some((can) => can.plannedParticleCount > MAX_PARTICLES_PER_CAN));
-const emptyCan = computed(() => batch.cans.some((can) => !can.plannedParticleCount || can.plannedParticleCount < 1));
-const canContinue = computed(() => !batch.overBatchLimit && !exceedCanLimit && !emptyCan);
+onMounted(() => {
+  // 计划与实际上分开：这一页编辑的是计划，界面上必须始终有可编辑的罐位
+  batch.ensurePlan();
+});
+
+const exceedCanLimit = computed(() =>
+  batch.plannedParticleCounts.some((value) => value > MAX_PARTICLES_PER_CAN),
+);
+const emptyCan = computed(() =>
+  batch.plannedParticleCounts.some((value) => !value || value < 1),
+);
+const canContinue = computed(
+  () => batch.plannedParticleCounts.length > 0 && !batch.overBatchLimit && !exceedCanLimit && !emptyCan,
+);
 
 function stepCan(delta: number): void {
   batch.setCanCount(batch.canCount + delta);
@@ -78,20 +89,20 @@ function goNext(): void {
       </div>
 
       <ul class="structure__cans">
-        <li v-for="(can, index) in batch.cans" :key="can.index">
+        <li v-for="(planned, index) in batch.plannedParticleCounts" :key="index">
           <div class="structure__can-head">
             <Cylinder :size="16" aria-hidden="true" />
-            <span>罐 {{ can.index }}</span>
+            <span>罐 {{ index + 1 }}</span>
           </div>
           <AppInput
-            v-model="can.plannedParticleCount"
+            v-model="batch.plannedParticleCounts[index]"
             label="粒子数量"
             type="number"
             :min="1"
             :max="MAX_PARTICLES_PER_CAN"
             :readonly="!batch.editable"
             :error="
-              can.plannedParticleCount > MAX_PARTICLES_PER_CAN
+              planned > MAX_PARTICLES_PER_CAN
                 ? `不得超过 ${MAX_PARTICLES_PER_CAN} 粒`
                 : ''
             "

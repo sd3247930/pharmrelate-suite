@@ -169,7 +169,7 @@ class BatchCrudTests(TempDatabaseTestCase):
     def test_storage_reports_database_path(self) -> None:
         body = self.client.get("/api/system/storage").json()
         self.assertTrue(body["exists"])
-        self.assertEqual(body["schemaVersion"], "3")
+        self.assertEqual(body["schemaVersion"], "4")
         # 必须落在临时目录，不能是用户真实数据目录
         self.assertIn("pharmrelate-test-", body["databasePath"])
 

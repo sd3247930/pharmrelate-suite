@@ -84,6 +84,14 @@ class Batch:
     early_end: EarlyEnd | None = None
     """提前结束记录。为 None 表示本批次按计划正常采集完成。"""
 
+    planned_particle_counts: list[int] = field(default_factory=list)
+    """包装结构计划：每罐的计划粒子数，长度即计划罐数。
+
+    与 `box.cans` 严格区分：这里是**计划**（界面 2 定，扫码前就存在），
+    `box.cans` 是**实际**（界面 3 扫出来后才存在）。
+    两者分开，"计划 vs 实际"的核对才有意义；导出 XML 只用实际数据。
+    """
+
     @property
     def can_count(self) -> int:
         return len(self.box.cans)
@@ -94,7 +102,13 @@ class Batch:
 
     @property
     def planned_particle_total(self) -> int:
+        if self.planned_particle_counts:
+            return sum(self.planned_particle_counts)
         return sum(can.planned_particle_count for can in self.box.cans)
+
+    @property
+    def planned_can_count(self) -> int:
+        return len(self.planned_particle_counts) or self.can_count
 
     def iter_export_nodes(self) -> Iterator[tuple[str, int, str | None]]:
         """按 XML 基准文件的顺序产出 (curCode, packLayer, parentCode)。
@@ -113,11 +127,17 @@ class Batch:
         return [code for code, _layer, _parent in self.iter_export_nodes()]
 
     def find_duplicate_codes(self) -> list[str]:
-        """返回重复出现的条码，按首次重复顺序。"""
+        """返回重复出现的条码，按首次重复顺序。
+
+        空字符串不算条码：草稿阶段箱号与罐号都还没填，全是空串，
+        若把它们计入去重就会把正常草稿误判成"条码重复"。
+        """
 
         seen: set[str] = set()
         duplicates: list[str] = []
         for code in self.all_codes():
+            if not code.strip():
+                continue
             if code in seen and code not in duplicates:
                 duplicates.append(code)
             seen.add(code)

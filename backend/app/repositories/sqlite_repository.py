@@ -87,12 +87,18 @@ class SqliteBatchRepository:
                 actual_particle_count=row["early_end_particle_count"] or 0,
             )
 
+        plan_rows = connection.execute(
+            "SELECT planned_particle_count FROM can_plan WHERE batch_id = ? ORDER BY can_index ASC",
+            (row["id"],),
+        ).fetchall()
+
         return Batch(
             batch_no=row["batch_no"],
             made_date=row["made_date"],
             validate_date=row["validate_date"],
             box=box,
             early_end=early_end,
+            planned_particle_counts=[item["planned_particle_count"] for item in plan_rows],
         )
 
     def _record(self, connection: sqlite3.Connection, row: sqlite3.Row) -> BatchRecord:
@@ -218,6 +224,23 @@ class SqliteBatchRepository:
             rows,
         )
 
+    def _replace_can_plan(
+        self, connection: sqlite3.Connection, batch_id: str, batch: Batch
+    ) -> None:
+        connection.execute("DELETE FROM can_plan WHERE batch_id = ?", (batch_id,))
+        if not batch.planned_particle_counts:
+            return
+        connection.executemany(
+            """
+            INSERT INTO can_plan (batch_id, can_index, planned_particle_count)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (batch_id, index, planned)
+                for index, planned in enumerate(batch.planned_particle_counts, start=1)
+            ],
+        )
+
     def create(self, batch: Batch, status: str = STATUS_DRAFT) -> BatchRecord:
         batch_id = str(uuid.uuid4())
         timestamp = _now()
@@ -266,6 +289,7 @@ class SqliteBatchRepository:
                 ),
             )
             self._insert_codes(connection, batch_id, batch, timestamp)
+            self._replace_can_plan(connection, batch_id, batch)
 
         record = self.get(batch_id)
         assert record is not None
@@ -315,6 +339,7 @@ class SqliteBatchRepository:
 
             connection.execute("DELETE FROM code WHERE batch_id = ?", (batch_id,))
             self._insert_codes(connection, batch_id, batch, timestamp)
+            self._replace_can_plan(connection, batch_id, batch)
 
         return self.get(batch_id)
 

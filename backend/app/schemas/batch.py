@@ -28,12 +28,15 @@ class BatchPayload(CamelModel):
     made_date: str
     validate_date: str
     box: BoxPayload
+    planned_particle_counts: list[int] = Field(default_factory=list)
+    """包装结构计划：每罐计划粒子数。与 box.cans 的实际数据严格分开。"""
 
     def to_domain(self) -> Batch:
         return Batch(
             batch_no=self.batch_no,
             made_date=self.made_date,
             validate_date=self.validate_date,
+            planned_particle_counts=list(self.planned_particle_counts),
             box=BoxCode(
                 code=self.box.code,
                 cans=[
@@ -78,6 +81,7 @@ def serialize_batch_data(batch: Batch) -> dict[str, object]:
         "batchNo": batch.batch_no,
         "madeDate": batch.made_date,
         "validateDate": batch.validate_date,
+        "plannedParticleCounts": list(batch.planned_particle_counts),
         "box": {
             "code": batch.box.code,
             "cans": [

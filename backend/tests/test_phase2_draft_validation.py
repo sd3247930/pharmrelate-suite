@@ -28,6 +28,7 @@ def empty_structure_payload(batch_no: str = "DRAFT-0001") -> dict[str, object]:
         "batchNo": batch_no,
         "madeDate": "2026-09-23",
         "validateDate": "2026-10-23",
+        "plannedParticleCounts": [],
         "box": {"code": "", "cans": [{"index": 1, "code": "", "plannedParticleCount": 0, "particles": []}]},
     }
 
@@ -89,18 +90,24 @@ class DraftValidationTests(TempDatabaseTestCase):
                 response = self.client.post("/api/batches", json=payload)
                 self.assertEqual(response.status_code, 422, response.text)
 
-    def test_half_filled_can_structure_is_rejected(self) -> None:
-        """罐层面一动笔（有罐号但计划粒子数为 0），就必须自洽。"""
+    def test_plan_with_zero_particles_is_rejected(self) -> None:
+        """计划一动笔就必须自洽：某罐计划 0 粒直接拦下。"""
 
         payload = empty_structure_payload()
-        payload["box"]["code"] = "80217619000000001003"
-        payload["box"]["cans"] = [
-            {"index": 1, "code": "80217629000000001005", "plannedParticleCount": 0, "particles": []}
-        ]
+        payload["plannedParticleCounts"] = [500, 0]
         response = self.client.post("/api/batches", json=payload)
         self.assertEqual(response.status_code, 422)
         codes = {issue["code"] for issue in response.json()["error"]["detail"]["issues"]}
         self.assertIn("PARTICLE_PLAN_RANGE", codes)
+
+    def test_plan_over_batch_limit_is_rejected(self) -> None:
+        payload = empty_structure_payload()
+        payload["plannedParticleCounts"] = [2500, 2500, 2500, 2500, 2500, 2500]
+        response = self.client.post("/api/batches", json=payload)
+        self.assertEqual(response.status_code, 422)
+        codes = {issue["code"] for issue in response.json()["error"]["detail"]["issues"]}
+        self.assertIn("CAN_COUNT_RANGE", codes)
+        self.assertIn("PARTICLE_TOTAL_RANGE", codes)
 
     def test_generating_scan_grid_requires_complete_structure(self) -> None:
         created = self.client.post("/api/batches", json=empty_structure_payload()).json()
@@ -112,7 +119,7 @@ class DraftValidationTests(TempDatabaseTestCase):
         detail = response.json()["error"]["detail"]
         self.assertEqual(detail["reason"], "STRUCTURE_INCOMPLETE")
         codes = {issue["code"] for issue in detail["issues"]}
-        self.assertIn("BOX_CODE_REQUIRED", codes)
+        self.assertIn("PLAN_REQUIRED", codes)
 
     def test_generating_scan_grid_succeeds_after_structure_filled(self) -> None:
         created = self.client.post("/api/batches", json=empty_structure_payload()).json()

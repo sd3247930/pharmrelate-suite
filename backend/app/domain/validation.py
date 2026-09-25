@@ -114,80 +114,94 @@ def validate_base_info(batch: Batch) -> list[BatchIssue]:
     return issues
 
 
-def validate_box_code(batch: Batch) -> list[BatchIssue]:
-    """只校验箱号。
+def validate_plan(batch: Batch) -> list[BatchIssue]:
+    """校验包装结构计划：罐数范围、每罐计划粒子数、单批次总量。
 
-    箱号在基础信息页就可以录入，此时包装结构往往还是空的，
-    因此这里采取"填了就检查、没填不追问"的规则。
+    这是界面 2 的产出，纯粹是计划，不含任何真实条码。
     """
-
-    if not batch.box.code.strip():
-        return []
-    return _check_code(batch.box.code, 3, "box.code")
-
-
-def structure_started(batch: Batch) -> bool:
-    """包装结构是否已经动笔。
-
-    判定依据是**罐层面**有没有数据，而不是箱号：箱号在基础信息页就能填，
-    它单独存在并不代表包装结构已经开始配置。
-    """
-
-    return any(
-        can.code.strip() or can.particles or can.planned_particle_count
-        for can in batch.box.cans
-    )
-
-
-def validate_can_structure(batch: Batch) -> list[BatchIssue]:
-    """校验罐与粒子：罐数范围、罐号、计划粒子数、层级前缀、全局去重。"""
 
     issues: list[BatchIssue] = []
 
-    # ---- 包装结构 ----
-    can_count = batch.can_count
+    counts = batch.planned_particle_counts
+    if not counts:
+        # 还没有计划：允许（草稿阶段），由调用方决定是否要求完整
+        return issues
+
+    can_count = len(counts)
     if not MIN_CANS <= can_count <= MAX_CANS:
         issues.append(
             BatchIssue(
                 SEVERITY_ERROR,
                 "CAN_COUNT_RANGE",
-                "box.cans",
+                "plannedParticleCounts",
                 f"罐数必须在 {MIN_CANS}～{MAX_CANS} 之间，当前为 {can_count}。",
             )
         )
 
-    # ---- 罐号与粒子 ----
+    for index, planned in enumerate(counts, start=1):
+        if planned < 1:
+            issues.append(
+                BatchIssue(
+                    SEVERITY_ERROR,
+                    "PARTICLE_PLAN_RANGE",
+                    f"plannedParticleCounts[{index - 1}]",
+                    f"罐 {index} 的计划粒子数必须 ≥ 1，当前为 {planned}。",
+                )
+            )
+        elif planned > MAX_PARTICLES_PER_CAN:
+            issues.append(
+                BatchIssue(
+                    SEVERITY_ERROR,
+                    "PARTICLE_PLAN_RANGE",
+                    f"plannedParticleCounts[{index - 1}]",
+                    f"罐 {index} 的计划粒子数不得超过 {MAX_PARTICLES_PER_CAN}，当前为 {planned}。",
+                )
+            )
+
+    total = sum(counts)
+    if total > MAX_PARTICLES_PER_BATCH:
+        issues.append(
+            BatchIssue(
+                SEVERITY_ERROR,
+                "PARTICLE_TOTAL_RANGE",
+                "plannedParticleCounts",
+                f"计划总粒子数 {total} 已超过单批次上限 {MAX_PARTICLES_PER_BATCH}，请拆分为多个批次。",
+            )
+        )
+
+    return issues
+
+
+def _planned_for(batch: Batch, can_index: int) -> int:
+    counts = batch.planned_particle_counts
+    if 1 <= can_index <= len(counts):
+        return counts[can_index - 1]
+    if 1 <= can_index <= batch.can_count:
+        return batch.box.cans[can_index - 1].planned_particle_count
+    return 0
+
+
+def validate_actual_codes(batch: Batch) -> list[BatchIssue]:
+    """校验实际扫到的条码：箱号、罐号、粒子码的格式/层级/去重/溢出。"""
+
+    issues: list[BatchIssue] = []
+
+    if batch.box.code.strip():
+        issues.extend(_check_code(batch.box.code, 3, "box.code"))
+
     for can in batch.box.cans:
         prefix = f"box.cans[{can.index - 1}]"
-        issues.extend(_check_code(can.code, 2, f"{prefix}.code"))
+        if can.code.strip():
+            issues.extend(_check_code(can.code, 2, f"{prefix}.code"))
 
-        if can.planned_particle_count < 1:
-            issues.append(
-                BatchIssue(
-                    SEVERITY_ERROR,
-                    "PARTICLE_PLAN_RANGE",
-                    f"{prefix}.plannedParticleCount",
-                    f"罐 {can.index} 的计划粒子数必须 ≥ 1，当前为 {can.planned_particle_count}。",
-                )
-            )
-        elif can.planned_particle_count > MAX_PARTICLES_PER_CAN:
-            issues.append(
-                BatchIssue(
-                    SEVERITY_ERROR,
-                    "PARTICLE_PLAN_RANGE",
-                    f"{prefix}.plannedParticleCount",
-                    f"罐 {can.index} 的计划粒子数不得超过 {MAX_PARTICLES_PER_CAN}，"
-                    f"当前为 {can.planned_particle_count}。",
-                )
-            )
-
-        if len(can.particles) > can.planned_particle_count > 0:
+        planned = _planned_for(batch, can.index)
+        if planned and len(can.particles) > planned:
             issues.append(
                 BatchIssue(
                     SEVERITY_ERROR,
                     "PARTICLE_OVERFILL",
                     f"{prefix}.particles",
-                    f"罐 {can.index} 计划 {can.planned_particle_count} 粒，"
+                    f"罐 {can.index} 计划 {planned} 粒，"
                     f"实际录入 {len(can.particles)} 粒，已超计划。",
                 )
             )
@@ -221,25 +235,24 @@ def validate_can_structure(batch: Batch) -> list[BatchIssue]:
 
 
 def validate_structure(batch: Batch) -> list[BatchIssue]:
-    """严格模式：箱号必填 + 罐结构完整。
+    """严格模式：计划完整（生成扫码网格用）。
 
-    只在"生成扫码网格"这类真正需要完整结构的时机使用，
+    只在"生成扫码网格"这类真正需要完整计划的时机使用，
     不能拿它当保存草稿的守门人，否则界面 1 一保存就会被拦。
     """
 
     issues: list[BatchIssue] = []
-    if not batch.box.code.strip():
+    if not batch.planned_particle_counts:
         issues.append(
             BatchIssue(
                 SEVERITY_ERROR,
-                "BOX_CODE_REQUIRED",
-                "box.code",
-                "生成扫码网格前必须填写箱号。",
+                "PLAN_REQUIRED",
+                "plannedParticleCounts",
+                "生成扫码网格前必须设定罐数与每罐粒子数。",
             )
         )
-    else:
-        issues.extend(_check_code(batch.box.code, 3, "box.code"))
-    issues.extend(validate_can_structure(batch))
+    issues.extend(validate_plan(batch))
+    issues.extend(validate_actual_codes(batch))
     return issues
 
 
@@ -252,6 +265,16 @@ def validate_batch(batch: Batch, *, include_structure: bool = True) -> list[Batc
     return issues
 
 
+def validate_for_export(batch: Batch) -> list[BatchIssue]:
+    """导出/预览时的校验：只看实际数据是否自洽。
+
+    计划是否完整不影响 XML 渲染本身（计划不写进 XML），
+    "缺漏禁止导出"的判定在阶段 3.5 单独实现。
+    """
+
+    return validate_base_info(batch) + validate_actual_codes(batch)
+
+
 def validate_partial(batch: Batch) -> list[BatchIssue]:
     """保存草稿用的宽松校验：基础信息 + 已填写的部分。
 
@@ -262,9 +285,9 @@ def validate_partial(batch: Batch) -> list[BatchIssue]:
     """
 
     issues = validate_base_info(batch)
-    issues.extend(validate_box_code(batch))
-    if structure_started(batch):
-        issues.extend(validate_can_structure(batch))
+    if batch.planned_particle_counts:
+        issues.extend(validate_plan(batch))
+    issues.extend(validate_actual_codes(batch))
     return issues
 
 
