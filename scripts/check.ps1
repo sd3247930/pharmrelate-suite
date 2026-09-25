@@ -78,6 +78,9 @@ Invoke-Step -Name '黄金基准字节级比对' -WorkingDirectory $backendDir `
 Invoke-Step -Name 'P0 验收清单自动核对' -WorkingDirectory $backendDir `
     -Command @($python, 'tools\acceptance.py')
 
+Invoke-Step -Name '20 台并发压测（模拟客户端）' -WorkingDirectory $backendDir `
+    -Command @($python, 'tools\loadtest.py', '--quick')
+
 Invoke-Step -Name '前端单元测试（路由 + 条码规则）' -WorkingDirectory $frontendDir `
     -Command @('npm', 'test')
 

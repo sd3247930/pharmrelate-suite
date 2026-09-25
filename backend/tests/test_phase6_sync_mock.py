@@ -174,6 +174,29 @@ class FailureSemanticsTests(TransportTestCase):
 class CapabilityTests(TransportTestCase):
     """清单第 5 条：能力声明，尤其是 encrypted。"""
 
+    def test_duplicate_can_code_is_rejected(self) -> None:
+        """罐号也必须由服务端去重。
+
+        这是压测骨架发现的一个保真度缺口：多台移动端抢同一个罐时，
+        服务端若不去重，会出现两个罐共用一个罐号的数据。
+        真实实现里这条由数据库唯一索引保证，假实现必须同样对待 ——
+        否则压测跑出来的"通过"没有意义。
+        """
+
+        self.a.send([self.a.next_envelope([op("80217629000000001005", layer=2)])])
+        result = self.a.send([self.a.next_envelope([op("80217629000000001005", layer=2)])])
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.rejected[0].reason, REASON_DUPLICATE_CODE)
+        self.assertEqual(result.rejected[0].detail.get("entity"), "can")
+        self.assertEqual(self.hub.state(BATCH).can_count, 1, "重复罐号不得计入")
+
+    def test_different_can_codes_are_fine(self) -> None:
+        self.a.send([self.a.next_envelope([op("80217629000000001005", layer=2)])])
+        result = self.a.send([self.a.next_envelope([op("80217629000000001004", layer=2)])])
+        self.assertTrue(result.ok)
+        self.assertEqual(self.hub.state(BATCH).can_count, 2)
+
     def test_default_mock_is_not_encrypted(self) -> None:
         """选项 B 下通道就是明文的，能力声明必须如实反映，界面才能提示风险。"""
 

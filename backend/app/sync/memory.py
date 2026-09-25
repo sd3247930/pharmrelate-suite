@@ -61,6 +61,17 @@ class _ServerBatch:
     """服务端某一批次的状态。只存摘要所需的最小信息。"""
 
     codes: set[str] = field(default_factory=set)
+    """已占用的粒子码。"""
+
+    can_codes: set[str] = field(default_factory=set)
+    """已占用的罐号。**
+
+    必须在服务端拦住重复罐号：多台移动端抢同一个罐时，
+    若只靠客户端自觉，会出现两个罐共用同一个罐号的数据。
+    真实实现里这条由数据库唯一索引保证；假实现必须同样对待，
+    否则压测跑出来的"通过"没有意义。
+    """
+
     box_count: int = 0
     can_count: int = 0
 
@@ -183,6 +194,16 @@ class InMemoryHub:
                 if layer == 3:
                     batch.box_count = 1
                 elif layer == 2:
+                    if code in batch.can_codes:
+                        result.rejected.append(
+                            RejectedOp(
+                                seq=envelope.seq,
+                                reason=REASON_DUPLICATE_CODE,
+                                detail={"code": code, "entity": "can"},
+                            )
+                        )
+                        continue
+                    batch.can_codes.add(code)
                     batch.can_count += 1
                 elif layer == 1:
                     batch.codes.add(code)
