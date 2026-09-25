@@ -297,6 +297,19 @@ export interface Review {
   earlyEnd: EarlyEnd | null;
 }
 
+export interface ExportRecord {
+  id: string;
+  kind: 'xml' | 'html';
+  exportKind: 'normal' | 'early_end';
+  filename: string;
+  sha256: string;
+  byteLength: number;
+  particleTotal: number;
+  operator: string;
+  createdAt: string;
+  downloadUrl: string;
+}
+
 /** 条码层级判定，等价于后端的 classify_code。 */
 export function classifyCode(value: string): PackLayer | null {
   if (value.length !== CODE_LENGTH || !/^\d+$/.test(value)) return null;

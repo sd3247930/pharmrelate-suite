@@ -252,6 +252,30 @@ CREATE TABLE IF NOT EXISTS scan_cursor (
 );
 
 -- ---------------------------------------------------------------------------
+-- 导出记录（阶段 4）
+--
+-- 每次导出都留一条不可变的记录：文件名、SHA-256、字节数、导出类型、操作人。
+-- 药品追溯上"这份文件是什么时候、由谁、按哪份数据生成的"必须可查，
+-- 因此记录只增不改，哈希与文件内容一一对应。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS export_record (
+    id           TEXT PRIMARY KEY,
+    batch_id     TEXT NOT NULL REFERENCES batch (id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL CHECK (kind IN ('xml', 'html')),
+    export_kind  TEXT NOT NULL,
+    filename     TEXT NOT NULL,
+    sha256       TEXT NOT NULL,
+    byte_length  INTEGER NOT NULL,
+    batch_no     TEXT NOT NULL,
+    particle_total INTEGER NOT NULL,
+    operator     TEXT NOT NULL DEFAULT 'local-user',
+    device_id    TEXT NOT NULL DEFAULT 'windows-main',
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_export_batch ON export_record (batch_id, created_at DESC);
+
+-- ---------------------------------------------------------------------------
 -- 元数据（schema 版本，供后续迁移使用）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS meta (

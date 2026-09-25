@@ -18,6 +18,7 @@ import type {
   ScanSnapshot,
   SlotEditResponse,
   Review,
+  ExportRecord,
   TransitionsResponse,
   XmlPreviewResponse,
 } from '../types/batch';
@@ -275,6 +276,15 @@ export const api = {
     request<SlotEditResponse>(`/batches/${batchId}/redo`, { method: 'POST' }),
 
   review: (batchId: string) => request<Review>(`/batches/${batchId}/review`),
+
+  runExport: (batchId: string, kinds: Array<'xml' | 'html'>) =>
+    request<{ items: ExportRecord[]; exportKind: string }>(`/batches/${batchId}/export`, {
+      method: 'POST',
+      body: JSON.stringify({ kinds }),
+    }),
+
+  exportHistory: (batchId: string) =>
+    request<{ items: ExportRecord[]; total: number }>(`/batches/${batchId}/exports`),
 
   // -------------------------------------------------------------- 摄像头
   cameraStatus: () => request<CameraStatus>('/camera/status'),

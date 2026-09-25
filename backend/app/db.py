@@ -21,7 +21,7 @@ from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "repositories" / "schema.sql"
 DB_FILENAME = "pharmrelate.db"
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 
 def default_data_dir() -> Path:

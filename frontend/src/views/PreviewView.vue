@@ -20,9 +20,10 @@ import AppCard from '../components/AppCard.vue';
 import AppEmpty from '../components/AppEmpty.vue';
 import AppInput from '../components/AppInput.vue';
 import AppStatusBadge from '../components/AppStatusBadge.vue';
-import { ApiError, api } from '../api/client';
+import AppXmlViewer from '../components/AppXmlViewer.vue';
+import { ApiError, api, apiBaseUrl } from '../api/client';
 import { useBatchStore } from '../stores/batch';
-import type { Review } from '../types/batch';
+import type { ExportRecord, Review } from '../types/batch';
 
 /**
  * 界面 4：预览与导出。
@@ -57,8 +58,53 @@ async function loadReview(): Promise<void> {
   }
 }
 
+const exportHistory = ref<ExportRecord[]>([]);
+const exportMessage = ref('');
+
+async function loadExports(): Promise<void> {
+  if (!batch.batchId) return;
+  try {
+    exportHistory.value = (await api.exportHistory(batch.batchId)).items;
+  } catch {
+    exportHistory.value = [];
+  }
+}
+
+/**
+ * 导出并触发浏览器下载。
+
+ * 状态从「已核对」推进到「已导出」由服务端完成，前端不自行改状态；
+ * 导出后重新拉核对与记录，保证界面与库一致。
+ */
+async function downloadExport(kind: 'xml' | 'html'): Promise<void> {
+  if (!batch.batchId) return;
+  exportMessage.value = '';
+  try {
+    const result = await api.runExport(batch.batchId, [kind]);
+    const item = result.items[0];
+    const response = await fetch(`${apiBaseUrl()}${item.downloadUrl}`);
+    if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = item.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    exportMessage.value = `已导出 ${item.filename}（SHA-256 ${item.sha256.slice(0, 16)}…）`;
+    await Promise.all([loadExports(), loadReview()]);
+    await batch.refreshTransitions();
+  } catch (error) {
+    exportMessage.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
 onMounted(() => {
   void loadReview();
+  void loadExports();
 });
 
 // 流转原因 / 解锁原因
@@ -84,8 +130,6 @@ const pendingNeedsReason = computed(
 
 const errorIssues = computed(() => batch.issues.filter((issue) => issue.severity === 'error'));
 const warningIssues = computed(() => batch.issues.filter((issue) => issue.severity === 'warning'));
-
-const xmlLines = computed(() => (batch.preview ? batch.preview.replace(/\n$/, '').split('\n') : []));
 
 /** 预览里的 XML 是否与某个基准文件逐字符相同（用于页面上直接印证字节级一致）。 */
 const matchesGolden = ref<string>('');
@@ -205,6 +249,7 @@ async function submitEarlyEnd(): Promise<void> {
 
       <p v-if="sampleMessage" class="preview__message">{{ sampleMessage }}</p>
       <p v-if="copyState" class="preview__message">{{ copyState }}</p>
+      <p v-if="exportMessage" class="preview__message">{{ exportMessage }}</p>
 
       <dl class="preview__stats">
         <div>
@@ -359,9 +404,47 @@ async function submitEarlyEnd(): Promise<void> {
           <p v-else-if="exportKind === 'early_end'" class="preview__hint">
             本批为提前结束，导出内容仅包含实际录入数据，并会在审计日志中标记。
           </p>
-          <p v-else class="preview__hint">核对通过，可以导出。（正式导出在阶段 4 实现）</p>
+          <p v-else class="preview__hint">
+            核对通过，可以导出。文件名与 SHA-256 会在导出记录中留下。
+          </p>
         </div>
       </template>
+    </AppCard>
+
+    <AppCard title="导出记录" subtitle="每次导出都留一条不可变记录，哈希与文件内容一一对应。">
+      <AppEmpty
+        v-if="!exportHistory.length"
+        title="还没有导出记录"
+        description="完成核对后点击「导出 XML」或「导出 HTML」，这里会显示文件名、SHA-256 与导出时间。"
+      />
+      <table v-else class="preview__exports">
+        <thead>
+          <tr>
+            <th>文件名</th>
+            <th>格式</th>
+            <th>粒子数</th>
+            <th>字节</th>
+            <th>SHA-256</th>
+            <th>导出类型</th>
+            <th>时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in exportHistory" :key="item.id">
+            <td class="code-text">{{ item.filename }}</td>
+            <td>{{ item.kind.toUpperCase() }}</td>
+            <td class="code-text">{{ item.particleTotal }}</td>
+            <td class="code-text">{{ item.byteLength.toLocaleString('en-US') }}</td>
+            <td class="code-text preview__hash">{{ item.sha256.slice(0, 16) }}…</td>
+            <td>
+              <span class="preview__tag" :class="item.exportKind === 'early_end' ? 'is-partial' : 'is-ok'">
+                {{ item.exportKind === 'early_end' ? '提前结束' : '正常' }}
+              </span>
+            </td>
+            <td class="code-text preview__updated">{{ item.createdAt }}</td>
+          </tr>
+        </tbody>
+      </table>
     </AppCard>
 
     <AppCard
@@ -511,16 +594,18 @@ async function submitEarlyEnd(): Promise<void> {
         description="先完成基础信息与包装结构，然后点击「生成 XML 预览」。"
       />
       <div v-else class="preview__code" role="region" aria-label="XML 预览" tabindex="0">
-        <div v-for="(line, index) in xmlLines" :key="index" class="preview__line">
-          <span class="preview__lineno code-text" aria-hidden="true">{{ index + 1 }}</span>
-          <code class="code-text">{{ line }}</code>
-        </div>
+        <AppXmlViewer :value="batch.preview" :height="420" />
       </div>
 
       <template #footer>
-        <AppButton variant="ghost" disabled>
+        <!-- 导出不依赖"先生成预览"：预览只是给人看的，导出用的是服务端的数据。 -->
+        <AppButton variant="secondary" :disabled="!batch.batchId" @click="downloadExport('xml')">
           <template #icon><Download :size="16" aria-hidden="true" /></template>
-          下载 XML / HTML（阶段 4）
+          导出 XML
+        </AppButton>
+        <AppButton variant="secondary" :disabled="!batch.batchId" @click="downloadExport('html')">
+          <template #icon><Download :size="16" aria-hidden="true" /></template>
+          导出 HTML
         </AppButton>
       </template>
     </AppCard>

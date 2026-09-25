@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from .routes import audit, batches, camera, golden, health, review, scan, slots, system, xml_export
+from .routes import (
+    audit,
+    batches,
+    camera,
+    export,
+    golden,
+    health,
+    review,
+    scan,
+    slots,
+    system,
+    xml_export,
+)
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health.router)
@@ -14,6 +26,7 @@ api_router.include_router(batches.router)
 api_router.include_router(scan.router)
 api_router.include_router(slots.router)
 api_router.include_router(review.router)
+api_router.include_router(export.router)
 api_router.include_router(camera.router)
 api_router.include_router(audit.router)
 api_router.include_router(system.router)

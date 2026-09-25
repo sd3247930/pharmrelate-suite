@@ -12,7 +12,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -735,6 +736,120 @@ async function main() {
         ).ok,
       '提前结束记录已落库',
     );
+
+    // --------------------------------------- 端到端字节级断言（阶段 4）
+    //
+    // 用与基准完全相同的结构建批次，在真实浏览器里点「导出 XML」，
+    // 把下载到的文件与阶段 0 冻结的基准逐字节比对。
+    // 这是从"冻结基准"到"用户拿到文件"的完整链路验证。
+    const goldenBatch = await (
+      await fetch(`${apiOrigin}/api/batches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batchNo: '20260901',
+          madeDate: '2026-09-23',
+          validateDate: '2026-10-23',
+          plannedParticleCounts: [1, 1, 2],
+          box: {
+            code: '80217619000000001003',
+            cans: [
+              { index: 1, code: '80217629000000001005', plannedParticleCount: 1, particles: ['82062339000000001004'] },
+              { index: 2, code: '80217629000000001004', plannedParticleCount: 1, particles: ['82062339000000001001'] },
+              { index: 3, code: '80217629000000001006', plannedParticleCount: 2, particles: ['82062339000000001003', '82062339000000001002'] },
+            ],
+          },
+        }),
+      })
+    ).json();
+    for (const target of ['collecting', 'pending_review', 'verified']) {
+      await fetch(`${apiOrigin}/api/batches/${goldenBatch.id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      });
+    }
+
+    await page.locator('.app-sidebar__link', { hasText: '工作台' }).first().click();
+    await page.waitForSelector('.dashboard__table');
+    await page
+      .locator('.dashboard__table tbody tr', { hasText: '20260901' })
+      .first()
+      .getByRole('button', { name: /打开/ })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector('.app-topbar')?.textContent?.includes('20260901'),
+      undefined,
+      { timeout: 15000 },
+    );
+    await page.locator('.app-sidebar__link', { hasText: '预览导出' }).first().click();
+    await page.waitForSelector('.preview__per-can');
+
+    check(
+      !(await page.getByRole('button', { name: /生成 XML \/ HTML/ }).isDisabled()),
+      '核对通过后导出按钮可用',
+    );
+
+    // 点界面上的「导出 XML」。这里不依赖浏览器的 download 事件：
+    // blob 下载不保证派发该事件（Playwright 的已知限制），
+    // 而"文件有没有真的被浏览器存下来"属于浏览器行为，不是我们的代码。
+    // 我们验证的是自己负责的部分：记录、命名、哈希、以及字节一致性。
+    await page.getByRole('button', { name: /^导出 XML$/ }).click();
+    try {
+      await page.waitForSelector('.preview__exports tbody tr', { timeout: 20000 });
+    } catch (error) {
+      // 把界面上的提示打出来，避免只看到一句超时
+      const messages = await page.locator('.preview__message').allInnerTexts();
+      console.error('--- 导出后界面提示 ---');
+      for (const item of messages) console.error(`  ${item}`);
+      throw error;
+    }
+    check(true, '界面导出后出现导出记录');
+
+    const exportApi = await (
+      await fetch(`${apiOrigin}/api/batches/${goldenBatch.id}/exports`)
+    ).json();
+    const record = exportApi.items[0];
+    check(
+      /^Relation_20260901_\d{14}\.xml$/.test(record.filename),
+      '导出文件名符合约定命名',
+      record.filename,
+    );
+
+    const downloadedBytes = Buffer.from(
+      // downloadUrl 相对于 API 根，服务端与前端都用同一个前缀拼装
+      await (await fetch(`${apiOrigin}/api${record.downloadUrl}`)).arrayBuffer(),
+    );
+    const goldenBytes = readFileSync(
+      path.join(ROOT_DIR, 'backend', 'tests', 'golden', '1箱3罐.xml'),
+    );
+    check(
+      Buffer.compare(downloadedBytes, goldenBytes) === 0,
+      '导出文件与阶段 0 基准逐字节一致',
+      `${downloadedBytes.length} 字节`,
+    );
+
+    const expectedSha = createHash('sha256').update(goldenBytes).digest('hex');
+    check(
+      record.sha256 === expectedSha,
+      '导出记录中的 SHA-256 与文件内容一致',
+      record.sha256.slice(0, 16),
+    );
+    check(record.exportKind === 'normal', '导出类型标注为正常（非提前结束）');
+
+    const exportRow = await page.locator('.preview__exports tbody tr').first().innerText();
+    check(
+      exportRow.includes(expectedSha.slice(0, 16)),
+      '界面上的导出记录展示了同一个哈希',
+    );
+
+    // 导出后状态推进到已导出
+    await page.waitForFunction(
+      () => document.querySelector('.app-topbar')?.textContent?.includes('已导出'),
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, '首次导出后批次状态推进为「已导出」');
   } catch (error) {
     // 失败时把"现场"打出来：页面可见文本 + 浏览器控制台报错。
     // 没有这层，超时只能看到一句 waitForFunction，排查全靠猜。
