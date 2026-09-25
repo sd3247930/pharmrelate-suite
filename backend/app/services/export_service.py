@@ -17,6 +17,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ..db import Database
 from ..domain import batch_state as state
@@ -101,6 +102,7 @@ class ExportArtifact:
     record_id: str
     created_at: str
     export_kind: str
+    path: str = ""
 
     def to_dict(self, *, include_content: bool = False) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -114,6 +116,7 @@ class ExportArtifact:
             # 相对于 API 根（前端会用 apiBaseUrl() 拼前缀），
             # 这里带上 /api 会让客户端拼成 /api/api/... 而 404。
             "downloadUrl": f"/exports/{self.record_id}/download",
+            "storedAt": self.path,
         }
         if include_content:
             payload["content"] = self.content.decode("utf-8")
@@ -135,8 +138,49 @@ class ExportService:
         self._review = review
         self._lock = threading.RLock()
         self._cache: dict[str, ExportArtifact] = {}
-        """最近一次导出的内容缓存。文件本体落库成本高，一期先缓存 + 落记录；
-        文件落盘策略在阶段 5 打包时按数据目录规划。"""
+        """最近一次导出的内容缓存，用于省掉一次磁盘读。真正的持久化是落盘。"""
+
+    # ------------------------------------------------------------------ 落盘
+
+    def export_dir(self, batch_no: str) -> Path:
+        """导出目录：数据目录下的 exports/{batchNo}/。
+
+        与数据库同在用户数据目录，因此覆盖安装、升级都不会影响已导出的文件；
+        卸载也保留（D-033）。
+        """
+
+        return self._db.path.parent / "exports" / batch_no
+
+    def _write_file(self, batch_no: str, filename: str, content: bytes) -> Path:
+        directory = self.export_dir(batch_no)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / filename
+
+        # 文件名精确到秒，同一秒内重复导出会重名。内容相同就直接复用文件；
+        # 内容不同（例如同一秒内改过数据）则加序号，绝不覆盖已有文件 ——
+        # 追溯链上"上一个导出被悄悄覆盖掉"是不可接受的。
+        if path.exists():
+            if path.read_bytes() == content:
+                return path
+            stem, suffix = path.stem, path.suffix
+            counter = 2
+            while path.exists():
+                path = directory / f"{stem}_{counter}{suffix}"
+                counter += 1
+        path.write_bytes(content)
+
+        actual = hashlib.sha256(content).hexdigest()
+
+        # 落盘后重新读回并计算哈希：磁盘写入是最容易出问题的一环
+        # （磁盘满、权限、杀软拦截），不校验就会出现
+        # "记录说哈希是 X、文件其实是 Y"。
+        written = hashlib.sha256(path.read_bytes()).hexdigest()
+        if written != actual:
+            raise ExportBlockedError(
+                f"导出文件写入后校验失败：{path.name}",
+                detail={"path": str(path), "expected": actual, "actual": written},
+            )
+        return path
 
     # ------------------------------------------------------------------ 闸门
 
@@ -242,6 +286,9 @@ class ExportService:
         digest = hashlib.sha256(content).hexdigest()
         record_id = str(uuid.uuid4())
         filename = build_filename(batch_no, kind)
+        path = self._write_file(batch_no, filename, content)
+        # 落盘可能因重名而调整文件名，记录里必须写最终落盘的那个名字
+        filename = path.name
 
         with self._db.transaction() as connection:
             connection.execute(
@@ -275,6 +322,7 @@ class ExportService:
             record_id=record_id,
             created_at=created_at,
             export_kind=export_kind,
+            path=str(path),
         )
         self._cache[record_id] = artifact
         return artifact
@@ -285,7 +333,7 @@ class ExportService:
         with self._db.read() as connection:
             rows = connection.execute(
                 """
-                SELECT id, kind, export_kind, filename, sha256, byte_length,
+                SELECT id, kind, export_kind, filename, sha256, byte_length, batch_no,
                        particle_total, operator, created_at
                 FROM export_record WHERE batch_id = ?
                 ORDER BY created_at DESC, rowid DESC LIMIT ?
@@ -304,6 +352,7 @@ class ExportService:
                 "operator": row["operator"],
                 "createdAt": row["created_at"],
                 "downloadUrl": f"/exports/{row['id']}/download",
+                "storedAt": str(self.export_dir(row["batch_no"]) / row["filename"]),
             }
             for row in rows
         ]
@@ -312,8 +361,39 @@ class ExportService:
         cached = self._cache.get(record_id)
         if cached is not None:
             return cached
-        # 进程重启后缓存丢失：记录仍在，但内容无法复原（一期不落盘文件）
-        return None
+
+        # 缓存丢失（进程重启）时从磁盘读回 —— 落盘就是为了这一步
+        with self._db.read() as connection:
+            row = connection.execute(
+                "SELECT batch_no, kind, export_kind, filename, sha256, byte_length, "
+                "created_at FROM export_record WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+        if row is None:
+            return None
+
+        path = self.export_dir(row["batch_no"]) / row["filename"]
+        if not path.is_file():
+            return None
+
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != row["sha256"]:
+            # 文件被外部改动过：宁可报不可用，也不给出一份哈希对不上的文件
+            return None
+
+        artifact = ExportArtifact(
+            kind=row["kind"],
+            filename=row["filename"],
+            content=content,
+            sha256=row["sha256"],
+            byte_length=row["byte_length"],
+            record_id=record_id,
+            created_at=row["created_at"],
+            export_kind=row["export_kind"],
+            path=str(path),
+        )
+        self._cache[record_id] = artifact
+        return artifact
 
     def record_exists(self, record_id: str) -> bool:
         with self._db.read() as connection:

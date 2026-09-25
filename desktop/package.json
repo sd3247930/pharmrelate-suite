@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "electron .",
     "smoke": "electron . --smoke-test",
+    "dist": "electron-builder --win nsis",
     "tauri": "tauri dev",
     "tauri:build": "tauri build"
   },
@@ -15,6 +16,46 @@
   "type": "commonjs",
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.pharmrelate.multi",
+    "productName": "PharmRelate Multi",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!**/__pycache__/**",
+          "!tests/**",
+          "!tools/**"
+        ]
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend/dist"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "perMachine": false
+    }
   }
 }

@@ -75,6 +75,9 @@ Invoke-Step -Name '后端端到端冒烟（真实进程与端口）' -WorkingDir
 Invoke-Step -Name '黄金基准字节级比对' -WorkingDirectory $backendDir `
     -Command @($python, 'tools\compare_golden.py')
 
+Invoke-Step -Name 'P0 验收清单自动核对' -WorkingDirectory $backendDir `
+    -Command @($python, 'tools\acceptance.py')
+
 Invoke-Step -Name '前端单元测试（路由 + 条码规则）' -WorkingDirectory $frontendDir `
     -Command @('npm', 'test')
 
