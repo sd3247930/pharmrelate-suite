@@ -16,7 +16,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import AppButton from '../components/AppButton.vue';
@@ -24,6 +24,7 @@ import AppCard from '../components/AppCard.vue';
 import AppInput from '../components/AppInput.vue';
 import AppProgress from '../components/AppProgress.vue';
 import AppStatusBadge from '../components/AppStatusBadge.vue';
+import AppSlotGrid from '../components/AppSlotGrid.vue';
 import { cameraFrameUrl } from '../api/client';
 import {
   getAlarmSettings,
@@ -59,6 +60,7 @@ const probe = ref('');
 const selectedSlot = ref<Slot | null>(null);
 const replaceCode = ref('');
 const replaceError = ref('');
+const slotGrid = ref<InstanceType<typeof AppSlotGrid> | null>(null);
 let frameTimer: number | undefined;
 
 const batchId = computed(() => batch.batchId);
@@ -111,6 +113,24 @@ function selectSlot(slot: Slot): void {
   replaceCode.value = '';
   replaceError.value = '';
 }
+
+/**
+ * 重复扫码被拒绝时，直接把操作员带到那个槽位。
+
+ * 只说"条码已被使用"帮助有限 —— 真正要回答的是"它绑在哪儿"，
+ * 而槽位可能有几千个，靠人翻是找不到的。
+ */
+watch(
+  () => scan.blocked?.detail?.code,
+  (code) => {
+    if (typeof code !== 'string' || !code) return;
+    const index = currentSlots.value.findIndex((slot) => slot.code === code);
+    if (index >= 0) {
+      selectedSlot.value = currentSlots.value[index];
+      slotGrid.value?.scrollToIndex(index);
+    }
+  },
+);
 
 async function deleteSelectedSlot(): Promise<void> {
   const slot = selectedSlot.value;
@@ -376,22 +396,13 @@ onBeforeUnmount(() => {
             <template v-if="slotSummary.conflict">· 异常 {{ slotSummary.conflict }}</template>
           </p>
 
-          <ul class="scan__slots" role="list">
-            <li v-for="slot in currentSlots" :key="slot.index">
-              <button
-                type="button"
-                class="scan__slot"
-                :class="[`is-${slot.status}`, { 'is-selected': selectedSlot?.index === slot.index }]"
-                :aria-label="`槽位 ${slot.index}，${slot.status === 'scanned' ? '已扫描' : slot.status === 'empty' ? '待扫描' : '异常'}`"
-                @click="selectSlot(slot)"
-              >
-                <span class="code-text">{{ String(slot.index).padStart(3, '0') }}</span>
-                <CheckCircle2 v-if="slot.status === 'scanned'" :size="12" aria-hidden="true" />
-                <TriangleAlert v-else-if="slot.status === 'conflict'" :size="12" aria-hidden="true" />
-                <span v-else class="scan__slot-empty" aria-hidden="true">○</span>
-              </button>
-            </li>
-          </ul>
+          <AppSlotGrid
+            ref="slotGrid"
+            :slots="currentSlots"
+            :selected-index="selectedSlot?.index ?? null"
+            :height="220"
+            @select="selectSlot"
+          />
 
           <div v-if="selectedSlot" class="scan__slot-detail">
             <p class="scan__slot-title">
@@ -700,59 +711,6 @@ onBeforeUnmount(() => {
 .scan__history {
   display: flex;
   gap: var(--space-2);
-}
-
-.scan__slots {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
-  gap: var(--space-1);
-  max-height: 220px;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.scan__slot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2px;
-  width: 100%;
-  min-height: 26px;
-  padding: 0 var(--space-2);
-  font-size: var(--text-xs);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-/* 状态三重表达：颜色 + 图形 + 序号，颜色不是唯一线索 */
-.scan__slot.is-scanned {
-  color: var(--color-success);
-  background: var(--color-success-soft);
-  border-color: var(--color-success-border);
-}
-
-.scan__slot.is-empty {
-  color: var(--color-text-subtle);
-}
-
-.scan__slot.is-conflict {
-  color: var(--color-danger);
-  background: var(--color-danger-soft);
-  border-color: var(--color-danger-border);
-}
-
-.scan__slot.is-selected {
-  font-weight: var(--weight-semibold);
-  outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
-}
-
-.scan__slot-empty {
-  color: var(--color-text-subtle);
 }
 
 .scan__slot-detail {

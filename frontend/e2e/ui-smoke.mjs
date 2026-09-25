@@ -452,7 +452,7 @@ async function main() {
     check(finalErrors.length === 0, '扫码流程无未捕获异常', finalErrors.slice(0, 2).join(' | '));
 
     // ------------------------------------------------ 槽位编辑与撤销/重做（3.4）
-    const slots = page.locator('.scan__slot');
+    const slots = page.locator('.slot-grid__slot');
     check((await slots.count()) === 2, '本罐槽位数来自计划（2 个）');
 
     // 删除第 1 个槽位
@@ -486,7 +486,7 @@ async function main() {
     check(true, '重做后进度回到 1 / 2');
 
     // 替换：必须选"已扫描"的槽位，空槽没有替换入口
-    const scannedSlot = page.locator('.scan__slot.is-scanned').first();
+    const scannedSlot = page.locator('.slot-grid__slot.is-scanned').first();
     check((await scannedSlot.count()) === 1, '删除后只剩 1 个已扫描槽位');
     await scannedSlot.click();
     const newCode = '82062339000000001005';
@@ -526,6 +526,99 @@ async function main() {
       historyState.canUndo === 2 && historyState.canRedo === 0 && historyState.maxSteps === 50,
       '撤销栈深度上限 50，游标语义正确（撤销后重做、新操作截断重做分支）',
       JSON.stringify(historyState),
+    );
+
+    // ------------------------------------------------ 大槽位量性能（3.3）
+    //
+    // 单批次上限 12500 槽位（5 罐 × 2500）。界面按罐显示，
+    // 因此单屏最大是 2500 个槽位 —— 依然必须虚拟化。
+    // 12500 的整体规模由 AppSlotGrid 的单元测试覆盖。
+    const bigBatch = await (
+      await fetch(`${apiOrigin}/api/batches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batchNo: 'E2E-BIG-01',
+          madeDate: '2026-09-23',
+          validateDate: '2026-10-23',
+          plannedParticleCounts: [2500, 2500, 2500, 2500, 2500],
+          box: { code: '', cans: [] },
+        }),
+      })
+    ).json();
+    await fetch(`${apiOrigin}/api/batches/${bigBatch.id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'collecting' }),
+    });
+    // 通过会话 API 走到"拍粒子"，再放一个粒子进去，用于测定位
+    const bigScan = async (path, body) =>
+      (
+        await fetch(`${apiOrigin}/api/scan/${bigBatch.id}/${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+        })
+      ).json();
+    await bigScan('frame', { codes: ['80217619000000001003'] });
+    await bigScan('confirm');
+    await bigScan('frame', { codes: ['80217629000000001005'] });
+    await bigScan('confirm');
+    await bigScan('frame', { codes: ['82062339000000001004'] });
+
+    await page.locator('.app-sidebar__link', { hasText: '工作台' }).first().click();
+    await page.waitForSelector('.dashboard__table');
+    await page
+      .locator('.dashboard__table tbody tr', { hasText: 'E2E-BIG-01' })
+      .getByRole('button', { name: /打开/ })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector('.app-topbar')?.textContent?.includes('E2E-BIG-01'),
+      undefined,
+      { timeout: 15000 },
+    );
+
+    const gridStart = Date.now();
+    await page.locator('.app-sidebar__link', { hasText: '扫码采集' }).first().click();
+    await page.waitForSelector('.slot-grid__slot');
+    const gridMs = Date.now() - gridStart;
+    check(gridMs <= 500, '2500 槽位首屏渲染 ≤ 500ms', `${gridMs}ms`);
+
+    // 等布局稳定再数：首帧时容器宽度还没测量出来，列数会偏小
+    await page.waitForTimeout(300);
+    const firstCount = await page.locator('.slot-grid__slot').count();
+    check(
+      firstCount >= 10 && firstCount < 300,
+      '虚拟化生效：只渲染视口内的少量节点',
+      `${firstCount} / 2500`,
+    );
+
+    // 滚到底部，节点数应保持在同一量级
+    await page.locator('.slot-grid').evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await page.waitForTimeout(300);
+    const afterScrollCount = await page.locator('.slot-grid__slot').count();
+    check(
+      afterScrollCount >= 10 && afterScrollCount < 300,
+      '滚动到底部后渲染量不增长',
+      `${afterScrollCount} 个`,
+    );
+
+    // 定位：提交一个已存在的条码 → 判为重复 → 界面应自动跳到那个槽位
+    const locateStart = Date.now();
+    await page.getByLabel('手动输入 / 条码枪').fill('82062339000000001004');
+    await page.getByRole('button', { name: '提交' }).click();
+    await page.locator('.slot-grid__slot.is-selected').waitFor({ timeout: 15000 });
+    const locateMs = Date.now() - locateStart;
+    check(locateMs <= 2000, '重复条码可定位到对应槽位', `${locateMs}ms（含一次网络往返）`);
+
+    const bigAudit = await (
+      await fetch(`${apiOrigin}/api/audit?batchId=${bigBatch.id}`)
+    ).json();
+    check(
+      bigAudit.items.some((item) => item.reason === 'DUPLICATE_CODE'),
+      '大槽位量下重复扫码同样落审计',
     );
   } catch (error) {
     // 失败时把"现场"打出来：页面可见文本 + 浏览器控制台报错。
