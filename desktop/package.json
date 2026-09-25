@@ -1,0 +1,20 @@
+{
+  "name": "pharmrelate-multi-desktop",
+  "version": "0.1.0",
+  "description": "籽关通 (PharmRelate Multi) 桌面壳：Electron 主壳 + Tauri 备选实现",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "smoke": "electron . --smoke-test",
+    "tauri": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "author": "PharmRelate",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.5",
+    "electron": "^33.4.11"
+  }
+}

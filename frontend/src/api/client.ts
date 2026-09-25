@@ -1,0 +1,134 @@
+/**
+ * 统一 API 客户端。
+ *
+ * 后端所有错误都返回 { error: { code, message, detail } }，
+ * 因此这里只需要处理一种错误形状，并在 ApiError 中把 detail 原样带出，
+ * 让上层能把 issues / options 直接渲染给操作员。
+ */
+
+import type { BatchIssue, BatchPayload, HealthResponse, XmlPreviewResponse } from '../types/batch';
+
+export interface ApiErrorBody {
+  code: string;
+  message: string;
+  detail: Record<string, unknown>;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly detail: Record<string, unknown>;
+
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = body.code;
+    this.detail = body.detail ?? {};
+  }
+
+  /** 校验类错误携带的问题清单。 */
+  get issues(): BatchIssue[] {
+    const value = this.detail.issues;
+    return Array.isArray(value) ? (value as BatchIssue[]) : [];
+  }
+
+  /** 重复批号的三个可选动作。 */
+  get options(): Array<{ action: string; label: string }> {
+    const value = this.detail.options;
+    return Array.isArray(value) ? (value as Array<{ action: string; label: string }>) : [];
+  }
+}
+
+/**
+ * API 根地址。
+ *
+ * 浏览器开发态走 Vite 代理（同源 /api，无需处理 CORS）；
+ * Tauri 打包态由 `initApiBase()` 从 Rust 侧取到动态分配的端口再覆盖。
+ */
+let apiBase = '/api';
+
+export function apiBaseUrl(): string {
+  return apiBase;
+}
+
+export function setApiBase(url: string): void {
+  apiBase = url.replace(/\/$/, '');
+}
+
+/**
+ * 启动时解析真实后端地址。
+ *
+ * 依次尝试 Electron 预加载桥 → Tauri 命令 → 保持 /api（浏览器开发态走 Vite 代理）。
+ * 同一个前端产物因此能在浏览器、Electron、Tauri 三种宿主里运行，不需要分别构建。
+ */
+export async function initApiBase(): Promise<void> {
+  const bridge = (globalThis as { pharmrelate?: { apiBaseUrl?: () => Promise<string> } }).pharmrelate;
+  if (bridge?.apiBaseUrl) {
+    try {
+      const resolved = await bridge.apiBaseUrl();
+      if (resolved) {
+        setApiBase(resolved);
+        return;
+      }
+    } catch {
+      // 落到下一种宿主
+    }
+  }
+
+  const tauri = (globalThis as { __TAURI__?: { core?: { invoke?: (cmd: string) => Promise<unknown> } } })
+    .__TAURI__;
+  const invoke = tauri?.core?.invoke;
+  if (!invoke) return;
+  try {
+    const resolved = (await invoke('api_base_url')) as string;
+    if (resolved) setApiBase(resolved);
+  } catch {
+    // 取不到就保持 /api，由界面上的"本地服务未连接"提示暴露问题
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  });
+
+  if (!response.ok) {
+    let body: ApiErrorBody = {
+      code: 'NETWORK_ERROR',
+      message: `请求失败（HTTP ${response.status}）`,
+      detail: {},
+    };
+    try {
+      const parsed = (await response.json()) as { error?: ApiErrorBody };
+      if (parsed.error) body = parsed.error;
+    } catch {
+      // 响应体不是 JSON，保留默认信息
+    }
+    throw new ApiError(response.status, body);
+  }
+
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+export const api = {
+  health: () => request<HealthResponse>('/health'),
+  goldenXml: async (name: string): Promise<string> => {
+    const response = await fetch(`${apiBaseUrl()}/golden/${encodeURIComponent(name)}/xml`);
+    if (!response.ok) {
+      throw new ApiError(response.status, {
+        code: 'GOLDEN_READ_FAILED',
+        message: `读取基准文件 ${name} 失败`,
+        detail: { name },
+      });
+    }
+    return response.text();
+  },
+  previewXml: (payload: BatchPayload) =>
+    request<XmlPreviewResponse>('/xml/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};

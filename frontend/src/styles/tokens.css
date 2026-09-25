@@ -1,0 +1,119 @@
+/**
+ * 设计令牌 —— 全项目唯一的样式来源。
+ *
+ * 定位：车间工业操作台 + 现代化中后台。
+ * 优先级：防错 > 任务清晰 > 扫码效率 > 状态可见 > 错误可恢复 > 视觉装饰。
+ *
+ * 刻意不用：大面积渐变、玻璃拟态、过量阴影、彩色 KPI 卡片堆叠。
+ */
+
+:root {
+  /* ---------------------------------------------------------------- 品牌色 */
+  /* 深青作为主色：区别于通用后台的蓝色，长时间注视不易疲劳 */
+  --color-primary: #0e6e7a;
+  --color-primary-strong: #0a5560;
+  --color-primary-soft: #e4f1f3;
+  --color-primary-border: #a9d3d9;
+
+  /* ------------------------------------------------------------ 语义状态色 */
+  /* 状态一律"颜色 + 图标 + 文字"三重表达，颜色永不作为唯一信息载体 */
+  --color-success: #15803d;
+  --color-success-soft: #e6f4ea;
+  --color-success-border: #a8d5b5;
+
+  --color-warning: #b45309;
+  --color-warning-soft: #fdf3e5;
+  --color-warning-border: #f0cfa0;
+
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fdeaea;
+  --color-danger-border: #f0b4b4;
+
+  --color-info: #1d4ed8;
+  --color-info-soft: #e9eefc;
+  --color-info-border: #b9c8f2;
+
+  --color-neutral: #475569;
+  --color-neutral-soft: #eef1f4;
+  --color-neutral-border: #d3dae0;
+
+  /* ---------------------------------------------------------------- 背景层 */
+  --color-bg: #f1f4f6;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f8fafb;
+  --color-surface-sunken: #ebeef1;
+  --color-border: #d6dee3;
+  --color-border-strong: #b6c2ca;
+
+  /* ------------------------------------------------------------------ 文字 */
+  --color-text: #101a22;
+  --color-text-muted: #5a6b77;
+  --color-text-subtle: #8697a3;
+  --color-text-inverse: #ffffff;
+
+  /* ------------------------------------------------------------------ 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ------------------------------------------------------------------ 字体 */
+  --font-sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  /* 条码是一长串数字，必须等宽 + 表格数字，便于逐位核对 */
+  --font-mono: "Cascadia Mono", "Consolas", "JetBrains Mono", ui-monospace, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ------------------------------------------------------------------ 圆角 */
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+
+  /* ------------------------------------------------------------------ 阴影 */
+  /* 只用两层极浅阴影区分层级，不做发光或立体拟物 */
+  --shadow-sm: 0 1px 2px rgb(16 26 34 / 6%);
+  --shadow-md: 0 2px 8px rgb(16 26 34 / 8%);
+  --shadow-lg: 0 8px 24px rgb(16 26 34 / 12%);
+
+  /* ---------------------------------------------------------------- 动效时长 */
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 280ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ------------------------------------------------------------------ 尺寸 */
+  --sidebar-width: 232px;
+  --sidebar-width-collapsed: 60px;
+  --topbar-height: 52px;
+
+  /* 现场戴手套点击，触摸目标不能过小 */
+  --touch-target: 40px;
+  --focus-ring: 0 0 0 3px rgb(14 110 122 / 28%);
+}
+
+/* 尊重系统的减弱动效设置 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-normal: 0ms;
+    --duration-slow: 0ms;
+  }
+}
