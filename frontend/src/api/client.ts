@@ -6,7 +6,17 @@
  * 让上层能把 issues / options 直接渲染给操作员。
  */
 
-import type { BatchIssue, BatchPayload, HealthResponse, XmlPreviewResponse } from '../types/batch';
+import type {
+  BatchDetail,
+  BatchIssue,
+  BatchListResponse,
+  BatchNoConflict,
+  BatchPayload,
+  EarlyEnd,
+  HealthResponse,
+  TransitionsResponse,
+  XmlPreviewResponse,
+} from '../types/batch';
 
 export interface ApiErrorBody {
   code: string;
@@ -37,6 +47,18 @@ export class ApiError extends Error {
   get options(): Array<{ action: string; label: string }> {
     const value = this.detail.options;
     return Array.isArray(value) ? (value as Array<{ action: string; label: string }>) : [];
+  }
+
+  /** 重复批号冲突的完整上下文。 */
+  get batchNoConflict(): BatchNoConflict | null {
+    if (this.detail.reason !== 'BATCH_NO_EXISTS' || !this.detail.existing) return null;
+    return this.detail as unknown as BatchNoConflict;
+  }
+
+  /** 状态机拒绝流转时给出的允许目标。 */
+  get allowedTransitions(): string[] {
+    const value = this.detail.allowed;
+    return Array.isArray(value) ? (value as string[]) : [];
   }
 }
 
@@ -131,4 +153,56 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  listBatches: (params?: { status?: string; search?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.status) query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return request<BatchListResponse>(`/batches${suffix}`);
+  },
+
+  getBatch: (id: string) => request<BatchDetail>(`/batches/${id}`),
+
+  createBatch: (payload: BatchPayload, forceNewVersion = false) =>
+    request<BatchDetail>('/batches', {
+      method: 'POST',
+      body: JSON.stringify({ ...payload, forceNewVersion }),
+    }),
+
+  updateBatch: (id: string, payload: BatchPayload) =>
+    request<BatchDetail>(`/batches/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  getTransitions: (id: string) => request<TransitionsResponse>(`/batches/${id}/transitions`),
+
+  changeStatus: (id: string, target: string, reason = '', operator = '') =>
+    request<{ batch: BatchDetail; transition: Record<string, string> }>(
+      `/batches/${id}/status`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ target, reason, operator }),
+      },
+    ),
+
+  registerEarlyEnd: (id: string, reason: string, operator: string, note: string) =>
+    request<{ batch: BatchDetail; earlyEnd: EarlyEnd; missingParticles: number }>(
+      `/batches/${id}/early-end`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason, operator, note }),
+      },
+    ),
+
+  clearEarlyEnd: (id: string) =>
+    request<{ batch: BatchDetail; earlyEnd: null }>(`/batches/${id}/early-end`, {
+      method: 'DELETE',
+    }),
+
+  storage: () =>
+    request<{ databasePath: string; databaseDir: string; exists: boolean; schemaVersion: string }>(
+      '/system/storage',
+    ),
 };

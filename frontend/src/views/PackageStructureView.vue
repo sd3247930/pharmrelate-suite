@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, Box, ChevronRight, Cylinder, Minus, Plus } from 'lucide-vue-next';
+import { AlertTriangle, Box, ChevronRight, Cylinder, Lock, Minus, Plus } from 'lucide-vue-next';
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -48,13 +48,18 @@ function goNext(): void {
         <em>固定，不可修改</em>
       </div>
 
+      <p v-if="!batch.editable" class="structure__locked" role="status">
+        <Lock :size="16" aria-hidden="true" />
+        当前状态为「{{ batch.statusLabel }}」，包装结构只读。
+      </p>
+
       <div class="structure__counter">
         <span>罐数量</span>
         <div class="structure__stepper">
           <button
             type="button"
             aria-label="减少罐数"
-            :disabled="batch.canCount <= MIN_CANS"
+            :disabled="!batch.editable || batch.canCount <= MIN_CANS"
             @click="stepCan(-1)"
           >
             <Minus :size="16" aria-hidden="true" />
@@ -63,7 +68,7 @@ function goNext(): void {
           <button
             type="button"
             aria-label="增加罐数"
-            :disabled="batch.canCount >= MAX_CANS"
+            :disabled="!batch.editable || batch.canCount >= MAX_CANS"
             @click="stepCan(1)"
           >
             <Plus :size="16" aria-hidden="true" />
@@ -84,6 +89,7 @@ function goNext(): void {
             type="number"
             :min="1"
             :max="MAX_PARTICLES_PER_CAN"
+            :readonly="!batch.editable"
             :error="
               can.plannedParticleCount > MAX_PARTICLES_PER_CAN
                 ? `不得超过 ${MAX_PARTICLES_PER_CAN} 粒`
@@ -115,7 +121,7 @@ function goNext(): void {
 
       <template #footer>
         <AppButton variant="secondary" @click="router.push('/base-info')">返回上一步</AppButton>
-        <AppButton variant="primary" :disabled="!canContinue" @click="goNext">
+        <AppButton variant="primary" :disabled="!canContinue || !batch.editable" @click="goNext">
           下一步：扫码采集
           <template #icon><ChevronRight :size="16" aria-hidden="true" /></template>
         </AppButton>
@@ -143,6 +149,19 @@ function goNext(): void {
   font-size: var(--text-sm);
   font-style: normal;
   color: var(--color-text-subtle);
+}
+
+.structure__locked {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
 }
 
 .structure__counter {

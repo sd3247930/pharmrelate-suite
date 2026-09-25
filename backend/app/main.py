@@ -20,8 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .api import api_router
 from .api.errors import register_exception_handlers
+from .db import Database
 from .logging_config import configure_logging
-from .repositories.batch_repository import InMemoryBatchRepository
+from .repositories.sqlite_repository import SqliteBatchRepository
 
 logger = logging.getLogger("pharmrelate.api")
 
@@ -51,7 +52,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("PharmRelate 本地服务已停止")
 
 
-def create_app() -> FastAPI:
+def create_app(database: Database | None = None) -> FastAPI:
     configure_logging(os.environ.get("PHARMRELATE_LOG_LEVEL", "INFO"))
 
     app = FastAPI(
@@ -61,8 +62,10 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
-    # 阶段 2 换成 SQLite 实现即可，路由层通过依赖注入获取，无需改动。
-    app.state.batch_repository = InMemoryBatchRepository()
+    # 数据库文件默认放在用户数据目录，不放安装目录
+    # （安装目录通常无写权限，且卸载/升级容易把它清掉）。
+    app.state.database = database or Database()
+    app.state.batch_repository = SqliteBatchRepository(app.state.database)
 
     app.add_middleware(
         CORSMiddleware,
@@ -74,6 +77,8 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+
+    logger.info("本地库：%s", app.state.database.path)
 
     return app
 

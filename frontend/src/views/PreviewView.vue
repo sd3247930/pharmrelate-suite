@@ -1,10 +1,24 @@
 <script setup lang="ts">
-import { CheckCircle2, Copy, Download, FileWarning, FlaskConical, TriangleAlert } from 'lucide-vue-next';
+import {
+  ArrowRight,
+  CheckCircle2,
+  Copy,
+  Download,
+  FileWarning,
+  FlaskConical,
+  Lock,
+  LogOut,
+  Save,
+  TriangleAlert,
+  Undo2,
+} from 'lucide-vue-next';
 import { computed, ref } from 'vue';
 
+import AppDialog from '../components/AppDialog.vue';
 import AppButton from '../components/AppButton.vue';
 import AppCard from '../components/AppCard.vue';
 import AppEmpty from '../components/AppEmpty.vue';
+import AppInput from '../components/AppInput.vue';
 import AppStatusBadge from '../components/AppStatusBadge.vue';
 import { ApiError, api } from '../api/client';
 import { useBatchStore } from '../stores/batch';
@@ -21,6 +35,27 @@ const batch = useBatchStore();
 const loadingSample = ref(false);
 const sampleMessage = ref('');
 const copyState = ref('');
+
+// 流转原因 / 解锁原因
+const reasonDialogOpen = ref(false);
+const pendingTarget = ref('');
+const transitionReason = ref('');
+const transitionOperator = ref('操作员甲');
+
+// 提前结束签名
+const earlyEndOpen = ref(false);
+const earlyEndReason = ref('');
+const earlyEndOperator = ref('操作员甲');
+const earlyEndNote = ref('');
+
+const OPERATORS = ['操作员甲', '操作员乙', '操作员丙', '操作员丁'];
+
+const pendingTargetLabel = computed(
+  () => batch.transitions.find((item) => item.target === pendingTarget.value)?.label ?? '',
+);
+const pendingNeedsReason = computed(
+  () => batch.transitions.find((item) => item.target === pendingTarget.value)?.requiresReason ?? false,
+);
 
 const errorIssues = computed(() => batch.issues.filter((issue) => issue.severity === 'error'));
 const warningIssues = computed(() => batch.issues.filter((issue) => issue.severity === 'warning'));
@@ -72,6 +107,43 @@ async function copyXml(): Promise<void> {
     copyState.value = '已复制 XML';
   } catch {
     copyState.value = '复制失败，请手动选择文本';
+  }
+}
+
+async function saveDraft(): Promise<void> {
+  await batch.saveDraft();
+}
+
+async function requestTransition(target: string): Promise<void> {
+  const option = batch.transitions.find((item) => item.target === target);
+  pendingTarget.value = target;
+  transitionReason.value = '';
+  if (option?.requiresReason) {
+    reasonDialogOpen.value = true;
+    return;
+  }
+  await batch.changeStatus(target);
+}
+
+async function confirmTransition(): Promise<void> {
+  const ok = await batch.changeStatus(
+    pendingTarget.value,
+    transitionReason.value,
+    transitionOperator.value,
+  );
+  if (ok) reasonDialogOpen.value = false;
+}
+
+async function submitEarlyEnd(): Promise<void> {
+  const ok = await batch.registerEarlyEnd(
+    earlyEndReason.value,
+    earlyEndOperator.value,
+    earlyEndNote.value,
+  );
+  if (ok) {
+    earlyEndOpen.value = false;
+    earlyEndReason.value = '';
+    earlyEndNote.value = '';
   }
 }
 </script>
@@ -140,6 +212,122 @@ async function copyXml(): Promise<void> {
       </p>
     </AppCard>
 
+    <AppCard
+      title="批次生命周期"
+      subtitle="状态流转的唯一权威在服务端；这里只发起请求，非法流转会被拒绝。"
+    >
+      <template #actions>
+        <AppStatusBadge
+          :tone="(batch.status as never)"
+          :label="batch.statusLabel"
+          :detail="batch.editable ? undefined : '只读'"
+        />
+      </template>
+
+      <div class="preview__lifecycle">
+        <div class="preview__stage-line">
+          <template v-for="(step, index) in ['草稿', '采集中', '待核对', '已核对', '已导出', '已锁定', '已归档']" :key="step">
+            <span
+              class="preview__stage"
+              :class="{ 'is-current': step === batch.statusLabel }"
+            >
+              {{ step }}
+            </span>
+            <ArrowRight
+              v-if="index < 6"
+              :size="14"
+              class="preview__stage-arrow"
+              aria-hidden="true"
+            />
+          </template>
+        </div>
+
+        <p v-if="!batch.batchId" class="preview__hint">
+          尚未保存到本地库。<RouterLink to="/base-info">回到基础信息</RouterLink> 先保存草稿，状态流转才会启用。
+        </p>
+
+        <div v-else class="preview__actions">
+          <AppButton variant="secondary" :loading="batch.busy" :disabled="!batch.editable" @click="saveDraft">
+            <template #icon><Save :size="16" aria-hidden="true" /></template>
+            保存修改
+          </AppButton>
+
+          <AppButton
+            v-for="option in batch.transitions"
+            :key="option.target"
+            :variant="option.target === 'void' ? 'danger' : 'secondary'"
+            :disabled="batch.busy"
+            @click="requestTransition(option.target)"
+          >
+            <template #icon>
+              <Undo2 v-if="option.target === 'collecting' || option.target === 'pending_review'" :size="16" aria-hidden="true" />
+              <Lock v-else-if="option.target === 'locked'" :size="16" aria-hidden="true" />
+              <LogOut v-else-if="option.target === 'void'" :size="16" aria-hidden="true" />
+              <ArrowRight v-else :size="16" aria-hidden="true" />
+            </template>
+            转为「{{ option.label }}」
+          </AppButton>
+        </div>
+
+        <p v-if="batch.terminal" class="preview__hint">
+          当前是终态，不再有可执行的流转。
+        </p>
+      </div>
+
+      <div class="preview__early-end">
+        <div>
+          <h4>提前结束</h4>
+          <p class="preview__hint">
+            实际粒子数少于计划时，默认禁止导出；办理提前结束必须填写原因并选择操作人。
+          </p>
+        </div>
+        <div>
+          <AppButton
+            v-if="!batch.earlyEnd"
+            variant="secondary"
+            :disabled="!batch.batchId || !batch.editable"
+            @click="earlyEndOpen = true"
+          >
+            <template #icon><FileWarning :size="16" aria-hidden="true" /></template>
+            登记提前结束
+          </AppButton>
+          <AppButton
+            v-else
+            variant="ghost"
+            :disabled="!batch.editable"
+            @click="batch.clearEarlyEnd()"
+          >
+            撤销提前结束登记
+          </AppButton>
+        </div>
+      </div>
+
+      <dl v-if="batch.earlyEnd" class="preview__stats">
+        <div>
+          <dt>提前结束原因</dt>
+          <dd>{{ batch.earlyEnd.reason }}</dd>
+        </div>
+        <div>
+          <dt>操作人</dt>
+          <dd>{{ batch.earlyEnd.operator }}</dd>
+        </div>
+        <div>
+          <dt>备注</dt>
+          <dd>{{ batch.earlyEnd.note || '—' }}</dd>
+        </div>
+        <div>
+          <dt>实际罐 / 粒子</dt>
+          <dd class="code-text">
+            {{ batch.earlyEnd.actualCanCount }} / {{ batch.earlyEnd.actualParticleCount }}
+          </dd>
+        </div>
+        <div>
+          <dt>登记时间</dt>
+          <dd class="code-text">{{ batch.earlyEnd.at }}</dd>
+        </div>
+      </dl>
+    </AppCard>
+
     <AppCard v-if="errorIssues.length" title="导出被拦截" subtitle="以下问题必须解决后才能生成 XML。">
       <ul class="preview__issues">
         <li v-for="issue in errorIssues" :key="`${issue.code}-${issue.field}`" class="is-error">
@@ -184,6 +372,55 @@ async function copyXml(): Promise<void> {
         </AppButton>
       </template>
     </AppCard>
+
+    <AppDialog
+      v-model="reasonDialogOpen"
+      :title="`转为「${pendingTargetLabel}」`"
+      :description="
+        pendingNeedsReason
+          ? '该操作需要管理员确认并填写原因，结果会写入审计日志。'
+          : '确认执行该状态流转。'
+      "
+      :confirm-label="`确认转为「${pendingTargetLabel}」`"
+      :tone="pendingTarget === 'void' ? 'danger' : 'normal'"
+      :busy="batch.busy"
+      @confirm="confirmTransition"
+    >
+      <div class="preview__dialog-form">
+        <AppInput v-model="transitionReason" label="原因" placeholder="例如：发现条码录入错误，需解锁修正" required />
+        <AppInput v-model="transitionOperator" label="操作人" placeholder="填写管理员姓名" required />
+      </div>
+    </AppDialog>
+
+    <AppDialog
+      v-model="earlyEndOpen"
+      title="登记提前结束"
+      description="提前结束会记录原因、操作人与办理时的实际数量，并写入审计日志。"
+      confirm-label="确认提前结束"
+      :busy="batch.busy"
+      @confirm="submitEarlyEnd"
+    >
+      <div class="preview__dialog-form">
+        <AppInput
+          v-model="earlyEndReason"
+          label="提前结束原因"
+          placeholder="例如：药液不足，本批提前结束"
+          required
+        />
+        <label class="preview__select">
+          <span>操作人</span>
+          <select v-model="earlyEndOperator">
+            <option v-for="name in OPERATORS" :key="name" :value="name">{{ name }}</option>
+          </select>
+        </label>
+        <AppInput v-model="earlyEndNote" label="备注" placeholder="补充说明（可留空）" />
+        <p class="preview__hint">
+          实际罐数与实际粒子数由服务端按库内数据填写，不受界面影响。
+          当前计划 {{ batch.plannedParticleTotal }} 粒、实际 {{ batch.actualParticleTotal }} 粒，
+          缺漏 {{ batch.missingParticles }} 粒。
+        </p>
+      </div>
+    </AppDialog>
   </div>
 </template>
 
@@ -301,6 +538,88 @@ async function copyXml(): Promise<void> {
   overflow: auto;
   background: var(--color-surface-alt);
   border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.preview__lifecycle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.preview__stage-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.preview__stage {
+  padding: 2px var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-subtle);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+/* 当前状态：加粗 + 反色 + 边框，不只靠颜色区分 */
+.preview__stage.is-current {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-inverse);
+  background: var(--color-primary);
+  border-color: var(--color-primary-strong);
+}
+
+.preview__stage-arrow {
+  color: var(--color-text-subtle);
+}
+
+.preview__hint {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.preview__early-end {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.preview__early-end h4 {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.preview__dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.preview__select {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.preview__select span {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+}
+
+.preview__select select {
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  font: inherit;
+  color: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
 }
 

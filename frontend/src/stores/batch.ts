@@ -15,8 +15,12 @@ import {
   MAX_PARTICLES_PER_CAN,
   MIN_CANS,
   type BatchIssue,
+  type BatchNoConflict,
   type BatchPayload,
+  type BatchSummary,
   type CanPayload,
+  type EarlyEnd,
+  type TransitionOption,
 } from '../types/batch';
 
 function todayIso(offsetDays = 0): string {
@@ -30,6 +34,17 @@ function emptyCan(index: number): CanPayload {
 }
 
 export const useBatchStore = defineStore('batch', () => {
+  // ---- 已落库批次的元数据 ----
+  const batchId = ref('');
+  const status = ref('draft');
+  const statusLabel = ref('草稿');
+  const editable = ref(true);
+  const terminal = ref(false);
+  const transitions = ref<TransitionOption[]>([]);
+  const earlyEnd = ref<EarlyEnd | null>(null);
+  const savedBatches = ref<BatchSummary[]>([]);
+
+  // ---- 表单数据 ----
   const batchNo = ref('');
   const madeDate = ref(todayIso());
   const validateDate = ref(todayIso(30));
@@ -42,6 +57,8 @@ export const useBatchStore = defineStore('batch', () => {
   const busy = ref(false);
   const errorMessage = ref('');
   const conflictOptions = ref<Array<{ action: string; label: string }>>([]);
+  const conflict = ref<BatchNoConflict | null>(null);
+  const notice = ref('');
 
   const canCount = computed(() => cans.value.length);
   const plannedParticleTotal = computed(() =>
@@ -50,6 +67,18 @@ export const useBatchStore = defineStore('batch', () => {
   const overBatchLimit = computed(() => plannedParticleTotal.value > MAX_PARTICLES_PER_BATCH);
   const progressPercent = computed(() =>
     Math.min(100, Math.round((plannedParticleTotal.value / MAX_PARTICLES_PER_BATCH) * 1000) / 10),
+  );
+
+  /** 未保存的新批次（还没有 id）。 */
+  const isNew = computed(() => batchId.value === '');
+
+  /** 缺漏粒子数：计划减实际。 */
+  const missingParticles = computed(() =>
+    Math.max(0, plannedParticleTotal.value - actualParticleTotal.value),
+  );
+
+  const actualParticleTotal = computed(() =>
+    cans.value.reduce((sum, can) => sum + can.particles.length, 0),
   );
 
   function setCanCount(count: number): void {
@@ -160,6 +189,13 @@ export const useBatchStore = defineStore('batch', () => {
   }
 
   function reset(): void {
+    batchId.value = '';
+    status.value = 'draft';
+    statusLabel.value = '草稿';
+    editable.value = true;
+    terminal.value = false;
+    transitions.value = [];
+    earlyEnd.value = null;
     batchNo.value = '';
     madeDate.value = todayIso();
     validateDate.value = todayIso(30);
@@ -170,9 +206,190 @@ export const useBatchStore = defineStore('batch', () => {
     previewSha256.value = '';
     errorMessage.value = '';
     conflictOptions.value = [];
+    conflict.value = null;
+    notice.value = '';
+  }
+
+  /** 把服务端返回的批次详情同步进 store（状态与数据都以后端为准）。 */
+  function applyDetail(detail: {
+    id: string;
+    status: string;
+    statusLabel: string;
+    editable: boolean;
+    terminal: boolean;
+    allowedTransitions: string[];
+    earlyEnd: EarlyEnd | null;
+    data: BatchPayload;
+  }): void {
+    batchId.value = detail.id;
+    status.value = detail.status;
+    statusLabel.value = detail.statusLabel;
+    editable.value = detail.editable;
+    terminal.value = detail.terminal;
+    earlyEnd.value = detail.earlyEnd;
+    loadFromPayload(detail.data);
+  }
+
+  async function refreshTransitions(): Promise<void> {
+    if (!batchId.value) {
+      transitions.value = [];
+      return;
+    }
+    try {
+      const result = await api.getTransitions(batchId.value);
+      transitions.value = result.options;
+      status.value = result.status;
+      statusLabel.value = result.statusLabel;
+      editable.value = result.editable;
+      terminal.value = result.terminal;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        reset();
+      }
+    }
+  }
+
+  async function refreshBatchList(params?: { status?: string; search?: string }): Promise<void> {
+    try {
+      const result = await api.listBatches(params);
+      savedBatches.value = result.items;
+    } catch {
+      savedBatches.value = [];
+    }
+  }
+
+  /**
+   * 保存草稿。
+   *
+   * 新建时若批号已存在，服务端返回 409 与三选一；这里只负责把冲突上下文
+   * 交给界面，由操作员决定，不代替他做选择。
+   */
+  async function saveDraft(forceNewVersion = false): Promise<boolean> {
+    busy.value = true;
+    errorMessage.value = '';
+    notice.value = '';
+    try {
+      const payload = toPayload();
+      const detail = isNew.value
+        ? await api.createBatch(payload, forceNewVersion)
+        : await api.updateBatch(batchId.value, payload);
+      applyDetail(detail);
+      await refreshTransitions();
+      await refreshBatchList();
+      notice.value = isNew.value ? '批次已创建' : '已保存';
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.batchNoConflict && !forceNewVersion) {
+          conflict.value = error.batchNoConflict;
+          conflictOptions.value = error.options;
+          return false;
+        }
+        issues.value = error.issues;
+        errorMessage.value = error.message;
+      } else {
+        errorMessage.value = error instanceof Error ? error.message : String(error);
+      }
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function openExisting(id: string): Promise<boolean> {
+    busy.value = true;
+    try {
+      const detail = await api.getBatch(id);
+      applyDetail(detail);
+      await refreshTransitions();
+      conflict.value = null;
+      notice.value = `已打开批次 ${detail.batchNo}`;
+      return true;
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error);
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  function dismissConflict(): void {
+    conflict.value = null;
+    conflictOptions.value = [];
+  }
+
+  async function changeStatus(target: string, reason = '', operator = ''): Promise<boolean> {
+    if (!batchId.value) return false;
+    busy.value = true;
+    errorMessage.value = '';
+    try {
+      const result = await api.changeStatus(batchId.value, target, reason, operator);
+      applyDetail(result.batch);
+      await refreshTransitions();
+      await refreshBatchList();
+      notice.value = `状态已变更为「${result.transition.toLabel}」`;
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError) {
+        issues.value = error.issues;
+        errorMessage.value = error.message;
+      } else {
+        errorMessage.value = error instanceof Error ? error.message : String(error);
+      }
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function registerEarlyEnd(
+    reason: string,
+    operator: string,
+    note: string,
+  ): Promise<boolean> {
+    if (!batchId.value) return false;
+    busy.value = true;
+    errorMessage.value = '';
+    try {
+      const result = await api.registerEarlyEnd(batchId.value, reason, operator, note);
+      applyDetail(result.batch);
+      earlyEnd.value = result.earlyEnd;
+      notice.value = '已登记提前结束';
+      return true;
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error);
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function clearEarlyEnd(): Promise<boolean> {
+    if (!batchId.value) return false;
+    busy.value = true;
+    try {
+      const result = await api.clearEarlyEnd(batchId.value);
+      applyDetail(result.batch);
+      earlyEnd.value = null;
+      notice.value = '已撤销提前结束登记';
+      return true;
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error);
+      return false;
+    } finally {
+      busy.value = false;
+    }
   }
 
   return {
+    batchId,
+    status,
+    statusLabel,
+    editable,
+    terminal,
+    transitions,
+    earlyEnd,
+    savedBatches,
     batchNo,
     madeDate,
     validateDate,
@@ -184,16 +401,30 @@ export const useBatchStore = defineStore('batch', () => {
     busy,
     errorMessage,
     conflictOptions,
+    conflict,
+    notice,
     canCount,
     plannedParticleTotal,
+    actualParticleTotal,
+    missingParticles,
     overBatchLimit,
     progressPercent,
+    isNew,
     setCanCount,
     clampParticles,
     toPayload,
     loadFromPayload,
     loadFromGoldenXml,
     runPreview,
+    applyDetail,
+    refreshTransitions,
+    refreshBatchList,
+    saveDraft,
+    openExisting,
+    dismissConflict,
+    changeStatus,
+    registerEarlyEnd,
+    clearEarlyEnd,
     reset,
   };
 });

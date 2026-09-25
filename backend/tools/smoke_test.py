@@ -11,9 +11,11 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -121,6 +123,10 @@ def main() -> int:
     base = f"http://127.0.0.1:{port}"
     failures: list[str] = []
 
+    # 关键：冒烟测试必须用临时数据目录，否则会往开发机真实本地库里塞测试批次
+    data_dir = tempfile.TemporaryDirectory(prefix="pharmrelate-smoke-")
+    environment = {**os.environ, "PHARMRELATE_DATA_DIR": data_dir.name}
+
     def check(condition: bool, label: str, extra: str = "") -> None:
         mark = " OK " if condition else "FAIL"
         suffix = f"  {extra}" if extra else ""
@@ -141,6 +147,7 @@ def main() -> int:
             str(port),
         ],
         cwd=str(BACKEND_DIR),
+        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -220,12 +227,95 @@ def main() -> int:
         options = conflict.get("error", {}).get("detail", {}).get("options", [])
         check(status == 409 and len(options) == 3, "重复批号返回三选一")
 
+        # ---- 阶段 2：SQLite 持久化、状态机、提前结束 ----
+
+        status, storage = get_json(f"{base}/api/system/storage")
+        in_temp = isinstance(storage, dict) and data_dir.name in str(storage.get("databasePath", ""))
+        check(
+            status == 200 and storage.get("schemaVersion") == "2" and in_temp,
+            "本地库落在用户数据目录且 schema 版本为 2",
+        )
+
+        batch_id = created.get("id")
+        check(bool(batch_id), "创建批次返回了 id")
+
+        # 创建新版本：forceNewVersion=True 时批次号应被改写为 -V2
+        payload_v2 = build_payload("SMOKE-0001", one_can)
+        payload_v2["forceNewVersion"] = True
+        status, versioned = post_json(f"{base}/api/batches", payload_v2)
+        check(
+            status == 201 and isinstance(versioned, dict)
+            and versioned.get("batchNo") == "SMOKE-0001-V2",
+            "选择「创建新版本」得到 SMOKE-0001-V2",
+        )
+
+        # 非法流转：draft → verified 跳级必须被拒
+        status, illegal = post_json(f"{base}/api/batches/{batch_id}/status", {"target": "verified"})
+        detail = illegal.get("error", {}).get("detail", {})
+        check(
+            status == 409
+            and detail.get("reason") == "ILLEGAL_TRANSITION"
+            and "collecting" in detail.get("allowed", []),
+            "非法流转被拒并返回允许的目标状态",
+        )
+
+        # 合法全流程
+        flow_ok = True
+        for target in ("collecting", "pending_review", "verified", "exported", "locked", "archived"):
+            code, body = post_json(f"{base}/api/batches/{batch_id}/status", {"target": target})
+            if code != 200 or body.get("batch", {}).get("status") != target:
+                flow_ok = False
+                break
+        check(flow_ok, "合法生命周期 draft → … → archived 全程通过")
+
+        # 只读状态下写入被拒
+        status, readonly_error = post_json(
+            f"{base}/api/batches/{batch_id}/early-end",
+            {"reason": "已归档后补登记", "operator": "操作员甲", "note": ""},
+        )
+        check(
+            status == 409 and "只读" in str(readonly_error.get("error", {}).get("message", "")),
+            "只读状态下提前结束登记被拒",
+        )
+
+        # 提前结束：新建一个批次来验签名字段
+        _, fresh = post_json(f"{base}/api/batches", build_payload("SMOKE-0002", SMOKE_CANS))
+        fresh_id = fresh.get("id")
+        status, signed = post_json(
+            f"{base}/api/batches/{fresh_id}/early-end",
+            {"reason": "药液不足", "operator": "操作员甲", "note": "剩余未灌装，已确认报废"},
+        )
+        early = signed.get("earlyEnd", {})
+        check(
+            status == 200
+            and early.get("operator") == "操作员甲"
+            and early.get("actualCanCount") == 3
+            and early.get("actualParticleCount") == 4
+            and bool(early.get("at")),
+            "提前结束登记四个签名字段与服务器实测数量",
+        )
+
+        # 重启后仍在：再读一次详情
+        status, reloaded = get_json(f"{base}/api/batches/{fresh_id}")
+        check(
+            status == 200 and reloaded.get("earlyEnd", {}).get("reason") == "药液不足",
+            "提前结束记录已落库并可回读",
+        )
+
+        status, listing = get_json(f"{base}/api/batches")
+        check(
+            status == 200 and listing.get("total", 0) >= 3,
+            "批次列表返回已保存的批次",
+            f"{listing.get('total')} 条",
+        )
+
     finally:
         process.terminate()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
+        data_dir.cleanup()
 
     print()
     if failures:

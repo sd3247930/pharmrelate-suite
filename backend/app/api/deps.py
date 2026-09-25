@@ -8,8 +8,13 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from ..db import Database
 from ..repositories.batch_repository import BatchRepository
 
 
 def get_batch_repository(request: Request) -> BatchRepository:
     return request.app.state.batch_repository
+
+
+def get_database(request: Request) -> Database:
+    return request.app.state.database

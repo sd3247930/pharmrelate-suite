@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, Database, RefreshCw, ServerCog, UserRound, WifiOff } from 'lucide-vue-next';
+import { RefreshCw, UserRound, WifiOff } from 'lucide-vue-next';
 import { computed } from 'vue';
 
 import AppButton from './AppButton.vue';
@@ -48,7 +48,11 @@ const serviceDetail = computed(() => {
 
     <div class="app-topbar__field">
       <span class="app-topbar__key">批次状态</span>
-      <AppStatusBadge tone="draft" />
+      <AppStatusBadge
+        :tone="(batch.status as never)"
+        :label="batch.statusLabel"
+        :detail="batch.editable ? undefined : '只读'"
+      />
     </div>
 
     <div class="app-topbar__field">
@@ -80,11 +84,6 @@ const serviceDetail = computed(() => {
       <span class="app-topbar__value">操作员</span>
     </div>
 
-    <span class="sr-only">
-      <CheckCircle2 aria-hidden="true" />
-      <Database aria-hidden="true" />
-      <ServerCog aria-hidden="true" />
-    </span>
   </header>
 </template>
 

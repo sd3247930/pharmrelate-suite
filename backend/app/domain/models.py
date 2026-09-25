@@ -18,6 +18,37 @@ from .constants import LAYER_BOX, LAYER_CAN, LAYER_PARTICLE
 
 
 @dataclass(slots=True)
+class EarlyEnd:
+    """「提前结束」记录。
+
+    V1.1 10.5 要求：缺漏状态下禁止导出，除非执行提前结束流程，
+    且必须记录原因、实际罐数、实际粒子数、操作人签名。
+    签名形式已确认为「操作人下拉选择 + 备注文本」。
+
+    导出 XML 时只包含实际录入的数据；early_end 本身**不写入 XML**，
+    只进审计日志与本地库。
+    """
+
+    reason: str
+    """提前结束原因（必填）。"""
+
+    operator: str
+    """操作人（从下拉列表选择）。"""
+
+    note: str = ""
+    """补充备注。"""
+
+    at: str = ""
+    """记录时间，ISO 8601。"""
+
+    actual_can_count: int = 0
+    """办理当时实际完成的罐数。"""
+
+    actual_particle_count: int = 0
+    """办理当时实际录入的粒子数。"""
+
+
+@dataclass(slots=True)
 class CanCode:
     """罐（packLayer=2）及其粒子。"""
 
@@ -50,6 +81,8 @@ class Batch:
     made_date: str
     validate_date: str
     box: BoxCode
+    early_end: EarlyEnd | None = None
+    """提前结束记录。为 None 表示本批次按计划正常采集完成。"""
 
     @property
     def can_count(self) -> int:

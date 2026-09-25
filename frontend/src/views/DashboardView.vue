@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { FileCheck2, ScanLine, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-vue-next';
-import { computed } from 'vue';
+import { FileCheck2, FolderOpen, ScanLine, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-vue-next';
+import { computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 
 import AppButton from '../components/AppButton.vue';
@@ -21,6 +21,10 @@ const batch = useBatchStore();
 const system = useSystemStore();
 
 const hasDraft = computed(() => batch.batchNo.trim().length > 0);
+
+onMounted(() => {
+  void batch.refreshBatchList();
+});
 
 const nextStep = computed(() => {
   if (!hasDraft.value) return { to: '/base-info', label: '开始创建批次' };
@@ -126,10 +130,42 @@ const nextStep = computed(() => {
       </AppCard>
     </div>
 
-    <AppCard title="最近批次" subtitle="阶段 1 尚未接入本地数据库，暂无历史记录。">
+    <AppCard
+      title="已保存批次"
+      subtitle="保存在本地 SQLite 库中，重启进程后仍然存在。"
+    >
+      <table v-if="batch.savedBatches.length" class="dashboard__table">
+        <thead>
+          <tr>
+            <th>批号</th>
+            <th>状态</th>
+            <th>生产日期</th>
+            <th>罐 / 粒子</th>
+            <th>最后更新</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in batch.savedBatches" :key="item.id">
+            <td class="code-text">{{ item.batchNo }}</td>
+            <td><AppStatusBadge :tone="(item.status as never)" :label="item.statusLabel" /></td>
+            <td class="code-text">{{ item.madeDate }}</td>
+            <td class="code-text">{{ item.canCount }} / {{ item.actualParticleTotal }}</td>
+            <td class="code-text dashboard__updated">{{ item.updatedAt }}</td>
+            <td>
+              <AppButton variant="ghost" @click="batch.openExisting(item.id)">
+                <template #icon><FolderOpen :size="16" aria-hidden="true" /></template>
+                打开
+              </AppButton>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
       <AppEmpty
+        v-else
         title="还没有已保存的批次"
-        description="创建第一个批次开始扫码采集。阶段 2 接入 SQLite 后这里会显示历史批次列表。"
+        description="创建第一个批次开始扫码采集。批次会保存到本地数据库，重启后仍然存在。"
       >
         <RouterLink to="/base-info"><AppButton variant="primary">创建批次</AppButton></RouterLink>
       </AppEmpty>
@@ -244,6 +280,15 @@ const nextStep = computed(() => {
 
 .bad {
   color: var(--color-danger);
+}
+
+.dashboard__table {
+  margin: calc(var(--space-2) * -1);
+}
+
+.dashboard__updated {
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
 }
 
 .dashboard__legend {

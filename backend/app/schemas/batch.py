@@ -49,6 +49,60 @@ class BatchPayload(CamelModel):
         )
 
 
+class BatchCreatePayload(BatchPayload):
+    """创建批次。
+
+    `force_new_version=True` 表示用户已在「重复批号三选一」中明确选择
+    「创建新版本」，此时允许服务端把批号改写为 batchNo-VN。
+    """
+
+    force_new_version: bool = False
+
+
+class BatchStatusPayload(CamelModel):
+    target: str
+    reason: str = ""
+    operator: str = ""
+
+
+class EarlyEndPayload(CamelModel):
+    """提前结束签名：操作人下拉选择 + 备注文本。"""
+
+    reason: str
+    operator: str
+    note: str = ""
+
+
+def serialize_batch_data(batch: Batch) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "batchNo": batch.batch_no,
+        "madeDate": batch.made_date,
+        "validateDate": batch.validate_date,
+        "box": {
+            "code": batch.box.code,
+            "cans": [
+                {
+                    "index": can.index,
+                    "code": can.code,
+                    "plannedParticleCount": can.planned_particle_count,
+                    "particles": list(can.particles),
+                }
+                for can in batch.box.cans
+            ],
+        },
+    }
+    if batch.early_end is not None:
+        payload["earlyEnd"] = {
+            "reason": batch.early_end.reason,
+            "operator": batch.early_end.operator,
+            "note": batch.early_end.note,
+            "at": batch.early_end.at,
+            "actualCanCount": batch.early_end.actual_can_count,
+            "actualParticleCount": batch.early_end.actual_particle_count,
+        }
+    return payload
+
+
 class BatchStats(CamelModel):
     can_count: int
     planned_particle_total: int

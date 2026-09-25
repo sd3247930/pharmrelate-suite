@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ChevronDown, ChevronRight, Info, Save } from 'lucide-vue-next';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Lock, Save } from 'lucide-vue-next';
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
+import AppBatchNoConflictDialog from '../components/AppBatchNoConflictDialog.vue';
 import AppButton from '../components/AppButton.vue';
 import AppCard from '../components/AppCard.vue';
 import AppInput from '../components/AppInput.vue';
+import AppStatusBadge from '../components/AppStatusBadge.vue';
 import { useBatchStore } from '../stores/batch';
 import { classifyCode, CODE_LENGTH, PACK_LAYER_BOX } from '../types/batch';
 
@@ -19,6 +21,12 @@ const router = useRouter();
 const batch = useBatchStore();
 
 const fixedOpen = ref(false);
+const conflictOpen = computed({
+  get: () => batch.conflict !== null,
+  set: (value: boolean) => {
+    if (!value) batch.dismissConflict();
+  },
+});
 
 const FIXED = [
   { label: '产品代码', value: '9999999' },
@@ -64,11 +72,50 @@ function goNext(): void {
   if (!canContinue.value) return;
   router.push('/package-structure');
 }
+
+async function saveDraft(): Promise<void> {
+  const ok = await batch.saveDraft();
+  if (ok) conflictOpen.value = false;
+}
+
+async function createNewVersion(): Promise<void> {
+  await batch.saveDraft(true);
+  conflictOpen.value = false;
+}
+
+async function openExisting(): Promise<void> {
+  const id = batch.conflict?.existing.id;
+  if (!id) return;
+  await batch.openExisting(id);
+  conflictOpen.value = false;
+}
 </script>
 
 <template>
   <div class="base-info">
     <AppCard title="基础信息" subtitle="三项由操作员填写，其余参数由程序固定，不随包装结构变化。">
+      <template #actions>
+        <AppStatusBadge
+          :tone="(batch.status as never)"
+          :label="batch.statusLabel"
+          :detail="batch.editable ? undefined : '只读'"
+        />
+      </template>
+
+      <p v-if="!batch.editable" class="base-info__locked" role="status">
+        <Lock :size="16" aria-hidden="true" />
+        当前状态为「{{ batch.statusLabel }}」，业务数据只读。如需修改，请先由管理员解锁。
+      </p>
+
+      <p v-if="batch.notice" class="base-info__notice" role="status">
+        <CheckCircle2 :size="16" aria-hidden="true" />
+        {{ batch.notice }}
+      </p>
+      <p v-if="batch.errorMessage" class="base-info__error" role="alert">
+        <AlertTriangle :size="16" aria-hidden="true" />
+        {{ batch.errorMessage }}
+      </p>
+
       <div class="base-info__form">
         <AppInput
           v-model="batch.batchNo"
@@ -76,15 +123,23 @@ function goNext(): void {
           placeholder="例如 20260901"
           required
           monospace
+          :readonly="!batch.editable"
           :error="batchNoError"
           hint="数字与英文字母，6～20 位。"
         />
-        <AppInput v-model="batch.madeDate" label="生产日期" type="date" required />
+        <AppInput
+          v-model="batch.madeDate"
+          label="生产日期"
+          type="date"
+          required
+          :readonly="!batch.editable"
+        />
         <AppInput
           v-model="batch.validateDate"
           label="有效期"
           type="date"
           required
+          :readonly="!batch.editable"
           :error="dateError"
         />
         <AppInput
@@ -92,6 +147,7 @@ function goNext(): void {
           label="箱号"
           placeholder="扫描或输入 20 位箱号"
           monospace
+          :readonly="!batch.editable"
           :error="boxCodeError"
           hint="箱号以 8021761 开头，定长 20 位。"
         />
@@ -99,16 +155,30 @@ function goNext(): void {
 
       <template #footer>
         <AppButton variant="ghost" @click="batch.reset()">重置</AppButton>
-        <AppButton variant="secondary">
+        <AppButton
+          variant="secondary"
+          :disabled="!batch.editable"
+          :loading="batch.busy"
+          @click="saveDraft"
+        >
           <template #icon><Save :size="16" aria-hidden="true" /></template>
-          保存草稿
+          {{ batch.isNew ? '保存草稿' : '保存修改' }}
         </AppButton>
-        <AppButton variant="primary" :disabled="!canContinue" @click="goNext">
+        <AppButton variant="primary" :disabled="!canContinue || !batch.editable" @click="goNext">
           下一步：设置包装结构
           <template #icon><ChevronRight :size="16" aria-hidden="true" /></template>
         </AppButton>
       </template>
     </AppCard>
+
+    <AppBatchNoConflictDialog
+      v-model="conflictOpen"
+      :conflict="batch.conflict"
+      :busy="batch.busy"
+      @open-existing="openExisting"
+      @create-new-version="createNewVersion"
+      @cancel="batch.dismissConflict()"
+    />
 
     <AppCard padding="none">
       <button class="base-info__toggle" type="button" :aria-expanded="fixedOpen" @click="fixedOpen = !fixedOpen">
@@ -145,6 +215,45 @@ function goNext(): void {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+
+.base-info__locked {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.base-info__notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border: 1px solid var(--color-success-border);
+  border-radius: var(--radius-md);
+}
+
+.base-info__error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-md);
 }
 
 .base-info__toggle {

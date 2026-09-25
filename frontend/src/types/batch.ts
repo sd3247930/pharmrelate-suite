@@ -84,6 +84,10 @@ export interface HealthResponse {
 export interface BatchSummary {
   id: string;
   status: string;
+  statusLabel: string;
+  editable: boolean;
+  terminal: boolean;
+  allowedTransitions: string[];
   createdAt: string;
   updatedAt: string;
   revision: number;
@@ -93,7 +97,74 @@ export interface BatchSummary {
   canCount: number;
   actualParticleTotal: number;
   plannedParticleTotal: number;
+  earlyEnd: EarlyEnd | null;
 }
+
+export interface EarlyEnd {
+  reason: string;
+  operator: string;
+  note: string;
+  at: string;
+  actualCanCount: number;
+  actualParticleCount: number;
+}
+
+export interface BatchDetail extends BatchSummary {
+  data: BatchPayload & { earlyEnd?: EarlyEnd };
+}
+
+export interface BatchListResponse {
+  items: BatchSummary[];
+  total: number;
+  statuses: string[];
+}
+
+export interface TransitionOption {
+  target: string;
+  label: string;
+  requiresAdmin: boolean;
+  requiresReason: boolean;
+}
+
+export interface TransitionsResponse {
+  status: string;
+  statusLabel: string;
+  editable: boolean;
+  terminal: boolean;
+  options: TransitionOption[];
+}
+
+export interface ConflictOption {
+  action: string;
+  label: string;
+}
+
+export interface BatchNoConflict {
+  reason: string;
+  existing: {
+    id: string;
+    batchNo: string;
+    status: string;
+    statusLabel: string;
+    updatedAt: string;
+    canCount: number;
+    actualParticleTotal: number;
+  };
+  suggestedBatchNo: string;
+  options: ConflictOption[];
+}
+
+/** 生命周期状态 → AppStatusBadge 的 tone。 */
+export const STATUS_TONE: Record<string, string> = {
+  draft: 'draft',
+  collecting: 'collecting',
+  pending_review: 'pending',
+  verified: 'verified',
+  exported: 'exported',
+  locked: 'locked',
+  archived: 'archived',
+  void: 'void',
+};
 
 /** 条码层级判定，等价于后端的 classify_code。 */
 export function classifyCode(value: string): PackLayer | null {
