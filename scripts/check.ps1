@@ -84,6 +84,9 @@ Invoke-Step -Name '20 台并发压测（模拟客户端）' -WorkingDirectory $b
 Invoke-Step -Name 'WebSocket 通道本地自测（ws + wss）' -WorkingDirectory $backendDir `
     -Command @($python, 'tools\ws_selftest.py')
 
+Invoke-Step -Name 'Android（uni-app）静态检查' -WorkingDirectory $root `
+    -Command @('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts\check-uniapp.ps1')
+
 Invoke-Step -Name '前端单元测试（路由 + 条码规则）' -WorkingDirectory $frontendDir `
     -Command @('npm', 'test')
 

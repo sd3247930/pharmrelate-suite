@@ -1,0 +1,48 @@
+{
+	"pages": [
+		{
+			"path": "pages/scan/scan",
+			"style": {
+				"navigationBarTitleText": "扫码采集"
+			}
+		},
+		{
+			"path": "pages/status/status",
+			"style": {
+				"navigationBarTitleText": "任务状态"
+			}
+		},
+		{
+			"path": "pages/settings/settings",
+			"style": {
+				"navigationBarTitleText": "连接设置"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "white",
+		"navigationBarTitleText": "籽关通",
+		"navigationBarBackgroundColor": "#0E6E7A",
+		"backgroundColor": "#F1F4F6"
+	},
+	"tabBar": {
+		"color": "#5A6B77",
+		"selectedColor": "#0E6E7A",
+		"backgroundColor": "#FFFFFF",
+		"borderStyle": "black",
+		"list": [
+			{
+				"pagePath": "pages/scan/scan",
+				"text": "扫码"
+			},
+			{
+				"pagePath": "pages/status/status",
+				"text": "状态"
+			},
+			{
+				"pagePath": "pages/settings/settings",
+				"text": "设置"
+			}
+		]
+	}
+}

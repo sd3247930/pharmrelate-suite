@@ -1,0 +1,73 @@
+{
+    "name" : "籽关通",
+    "appid" : "__UNI__PHARMRELATE",
+    /* appid 需在 HBuilderX 中重新获取：打开工程 → manifest.json 可视化界面 → 重新获取 appid。
+       未获取前只能跑 H5 与自定义调试基座，不能云打包。 */
+    "description" : "籽关通 (PharmRelate Multi) 移动采集端",
+    "versionName" : "0.1.0",
+    "versionCode" : "100",
+    "transformPx" : false,
+    /* 5+App特有相关 */
+    "app-plus" : {
+        "usingComponents" : true,
+        "nvueStyleCompiler" : "uni-app",
+        "compilerVersion" : 3,
+        "splashscreen" : {
+            "alwaysShowBeforeRender" : true,
+            "waiting" : true,
+            "autoclose" : true,
+            "delay" : 0
+        },
+        /* 模块配置 */
+        "modules" : {
+            "Barcode" : {}
+            /* Barcode 模块用于 uni.scanCode()；Camera 未启用，
+               因为一期识别管线在 Windows 服务端，移动端只做扫码与提交。 */
+        },
+        /* 应用发布信息 */
+        "distribute" : {
+            /* android打包配置 */
+            "android" : {
+                "permissions" : [
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.CHANGE_NETWORK_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.CHANGE_WIFI_MULTICAST_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.CAMERA\"/>",
+                    "<uses-permission android:name=\"android.permission.VIBRATE\"/>",
+                    "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>",
+                    "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>"
+                ],
+                /* CHANGE_WIFI_MULTICAST_STATE 是 mDNS 发现局域网主机的必要权限，
+                   没有它收不到组播广播。 */
+                "minSdkVersion" : 21,
+                "targetSdkVersion" : 30
+            },
+            /* ios打包配置 */
+            "ios" : {
+                "dSYMs" : false
+            },
+            /* SDK配置 */
+            "sdkConfigs" : {}
+        }
+    },
+    /* 快应用特有相关 */
+    "quickapp" : {},
+    /* 小程序特有相关 */
+    "mp-weixin" : {
+        "appid" : "",
+        "setting" : {
+            "urlCheck" : false
+        },
+        "usingComponents" : true
+    },
+    "h5" : {
+        "title" : "籽关通",
+        "router" : {
+            "mode" : "hash"
+        }
+    },
+    "vueVersion" : "3"
+}

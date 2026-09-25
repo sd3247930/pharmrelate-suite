@@ -1,0 +1,10 @@
+# uni-app 构建产物
+unpackage/
+node_modules/
+
+# HBuilderX 本地配置
+.hbuilderx/
+
+# 本地证书（自测用，不入库）
+certs/
+*.key
