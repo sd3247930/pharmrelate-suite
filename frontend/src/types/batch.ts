@@ -173,6 +173,70 @@ export const STATUS_TONE: Record<string, string> = {
   void: 'void',
 };
 
+// ---------------------------------------------------------------------------
+// 扫码会话
+// ---------------------------------------------------------------------------
+
+export const SCAN_STATUS_LABELS: Record<string, string> = {
+  idle: '待开始',
+  box_scanning: '拍箱号',
+  box_confirm: '箱号确认',
+  can_scanning: '拍罐号',
+  can_confirm: '罐号确认',
+  particle_scanning: '拍粒子',
+  can_review: '本罐核对',
+  next_can_prompt: '是否继续下一罐',
+  overall_review: '整体核对',
+  early_end: '已提前结束',
+  completed: '已完成',
+};
+
+export type ScanStatus = keyof typeof SCAN_STATUS_LABELS;
+
+export interface ScanEvent {
+  code: string;
+  label: string;
+  message: string;
+  blocking: boolean;
+  needsAlarm: boolean;
+  detail: Record<string, unknown>;
+}
+
+export interface ScanSnapshot {
+  batchId: string;
+  status: ScanStatus | string;
+  statusLabel: string;
+  currentCanIndex: number;
+  plannedCanCount: number;
+  plannedParticleTotal: number;
+  actualParticleTotal: number;
+  missingParticles: number;
+  currentCanPlanned: number;
+  currentCanScanned: number;
+  remainingInCan: number;
+  canComplete: boolean;
+  pendingCode: string;
+  lastEvent: ScanEvent | null;
+  conflictCount: number;
+  alarmCount: number;
+  canPlan: number[];
+  canCodes: string[];
+  canScanned: number[];
+}
+
+export interface CameraStatus {
+  running: boolean;
+  source: string;
+  batchId: string;
+  framesRead: number;
+  recognitions: number;
+  error: string;
+  hint: string;
+  startedAt: string;
+  lastFrameAt: string;
+  metadata: Record<string, unknown>;
+}
+
 /** 条码层级判定，等价于后端的 classify_code。 */
 export function classifyCode(value: string): PackLayer | null {
   if (value.length !== CODE_LENGTH || !/^\d+$/.test(value)) return null;

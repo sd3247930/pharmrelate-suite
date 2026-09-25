@@ -317,6 +317,139 @@ async function main() {
       consoleErrors.some((item) => item.includes('409')),
       '流程中确实触发了预期的 409（重复批号 / 非法流转）',
     );
+
+    // ------------------------------------------------ 扫码主流程（手动输入路径）
+    //
+    // 手动输入 / 条码枪 / 拍照三条路径最终走同一个会话 API，
+    // 因此这里用手动输入就能验证整条串联。
+    const scanBatch = await (
+      await fetch(`${apiOrigin}/api/batches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batchNo: 'E2E-SCAN-01',
+          madeDate: '2026-09-23',
+          validateDate: '2026-10-23',
+          plannedParticleCounts: [2],
+          box: { code: '', cans: [] },
+        }),
+      })
+    ).json();
+    await fetch(`${apiOrigin}/api/batches/${scanBatch.id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'collecting' }),
+    });
+
+    await page.locator('.app-sidebar__link', { hasText: '工作台' }).first().click();
+    await page.waitForSelector('.dashboard__table');
+    await page
+      .locator('.dashboard__table tbody tr', { hasText: 'E2E-SCAN-01' })
+      .getByRole('button', { name: /打开/ })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector('.app-topbar')?.textContent?.includes('E2E-SCAN-01'),
+      undefined,
+      { timeout: 15000 },
+    );
+
+    await page.locator('.app-sidebar__link', { hasText: '扫码采集' }).first().click();
+    await page.waitForSelector('.scan');
+
+    /** 读扫码页自己的状态徽章。不能直接查 .app-status-badge —— 顶部状态栏也有徽章。 */
+    const scanBadge = () => page.locator('.scan .app-status-badge').first().innerText();
+    async function waitForScanStatus(label) {
+      await page
+        .locator('.scan .app-status-badge', { hasText: label })
+        .first()
+        .waitFor({ timeout: 15000 });
+    }
+
+    await waitForScanStatus('拍箱号');
+    check(true, '扫码页从「拍箱号」开始，状态来自后端');
+
+    const manualInput = page.getByLabel('手动输入 / 条码枪');
+    const submit = page.getByRole('button', { name: '提交' });
+
+    /** 输入一组条码并等后端返回。 */
+    async function scanCode(text) {
+      await manualInput.fill(text);
+      await submit.click();
+      await page.waitForTimeout(500);
+    }
+
+    // 多码报警：拍箱号阶段给出两个码
+    await scanCode('80217619000000001003 80217619000000001004');
+    check(
+      (await page.locator('.scan__alarm').innerText()).includes('检测到多个条码'),
+      '拍箱阶段多码触发报警并阻断',
+    );
+
+    // 错层拦截：拿粒子码当箱号
+    await scanCode('82062339000000001004');
+    check(
+      (await page.locator('.scan__alarm').innerText()).includes('粒子'),
+      '错层条码被即时拦截并说明实际层级',
+    );
+
+    // 正确箱号 → 确认
+    await scanCode('80217619000000001003');
+    await page.getByRole('button', { name: /确认 802176/ }).click();
+    await waitForScanStatus('拍罐号');
+    check(true, '箱号确认后进入「拍罐号」');
+
+    await scanCode('80217629000000001005');
+    await page.getByRole('button', { name: /确认 802176/ }).click();
+    await waitForScanStatus('拍粒子');
+    check(true, '罐号确认后进入「拍粒子」');
+
+    // 先入 1 粒（未满），才能在未满状态下验证溢出
+    await scanCode('82062339000000001004');
+    check(
+      (await page.locator('.scan__facts').innerText()).includes('1 / 2'),
+      '粒子按采集顺序入格，进度 1 / 2',
+    );
+
+    // 溢出拦截：剩余 1 个槽位，本次识别 2 个 → 整帧拒绝
+    await scanCode('82062339000000001001 82062339000000001003');
+    const overflowText = await page.locator('.scan__alarm').innerText();
+    check(
+      overflowText.includes('剩余') && overflowText.includes('槽位'),
+      '超出剩余槽位被整帧拒绝并说明剩余数量',
+    );
+    check(
+      (await page.locator('.scan__facts').innerText()).includes('1 / 2'),
+      '溢出时不部分写入，进度仍为 1 / 2',
+    );
+
+    // 再补第 2 粒 → 满额
+    await scanCode('82062339000000001001');
+    await waitForScanStatus('本罐核对');
+    check(true, '粒子批量入格后满额进入「本罐核对」');
+    check(
+      (await page.locator('.scan__facts').innerText()).includes('2 / 2'),
+      '本罐进度显示 2 / 2',
+    );
+
+    await page.getByRole('button', { name: /本罐确认无误/ }).click();
+    await waitForScanStatus('整体核对');
+    check(true, '本罐确认后进入「整体核对」');
+
+    // 拦截与报警必须落审计
+    const scanAudit = await (
+      await fetch(`${apiOrigin}/api/audit?batchId=${scanBatch.id}`)
+    ).json();
+    const reasons = new Set(scanAudit.items.map((item) => item.reason));
+    check(
+      reasons.has('MULTI_CODE') && reasons.has('WRONG_LAYER') && reasons.has('OVERFLOW'),
+      '多码 / 错层 / 溢出全部落审计日志',
+      `${scanAudit.items.length} 条`,
+    );
+
+    const finalErrors = consoleErrors.filter(
+      (item) => !item.includes('Failed to load resource'),
+    );
+    check(finalErrors.length === 0, '扫码流程无未捕获异常', finalErrors.slice(0, 2).join(' | '));
   } catch (error) {
     // 失败时把"现场"打出来：页面可见文本 + 浏览器控制台报错。
     // 没有这层，超时只能看到一句 waitForFunction，排查全靠猜。

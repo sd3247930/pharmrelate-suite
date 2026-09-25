@@ -25,6 +25,7 @@ from .logging_config import configure_logging
 from .repositories.sqlite_repository import SqliteBatchRepository
 from .repositories.audit_repository import AuditRepository
 from .services.scan_service import ScanService
+from .services.camera import CameraManager
 
 logger = logging.getLogger("pharmrelate.api")
 
@@ -72,6 +73,8 @@ def create_app(database: Database | None = None) -> FastAPI:
     app.state.scan_service = ScanService(
         app.state.batch_repository, app.state.audit_repository
     )
+    app.state.camera_manager = CameraManager()
+    app.state.camera_manager.attach_scan_service(app.state.scan_service)
 
     app.add_middleware(
         CORSMiddleware,

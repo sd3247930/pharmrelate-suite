@@ -12,8 +12,10 @@ import type {
   BatchListResponse,
   BatchNoConflict,
   BatchPayload,
+  CameraStatus,
   EarlyEnd,
   HealthResponse,
+  ScanSnapshot,
   TransitionsResponse,
   XmlPreviewResponse,
 } from '../types/batch';
@@ -205,4 +207,60 @@ export const api = {
     request<{ databasePath: string; databaseDir: string; exists: boolean; schemaVersion: string }>(
       '/system/storage',
     ),
+
+  // ---------------------------------------------------------------- 扫码
+  scanSession: (batchId: string) => request<ScanSnapshot>(`/scan/${batchId}/session`),
+
+  scanFrame: (
+    batchId: string,
+    codes: string[],
+    conflicts: Array<Record<string, unknown>> = [],
+  ) =>
+    request<ScanSnapshot>(`/scan/${batchId}/frame`, {
+      method: 'POST',
+      body: JSON.stringify({ codes, conflicts }),
+    }),
+
+  scanConfirm: (batchId: string) =>
+    request<ScanSnapshot>(`/scan/${batchId}/confirm`, { method: 'POST' }),
+
+  scanRescan: (batchId: string) =>
+    request<ScanSnapshot>(`/scan/${batchId}/rescan`, { method: 'POST' }),
+
+  scanNextCan: (batchId: string, proceed: boolean) =>
+    request<ScanSnapshot>(`/scan/${batchId}/next-can`, {
+      method: 'POST',
+      body: JSON.stringify({ proceed }),
+    }),
+
+  scanReset: (batchId: string) =>
+    request<ScanSnapshot>(`/scan/${batchId}/reset`, { method: 'POST' }),
+
+  // -------------------------------------------------------------- 摄像头
+  cameraStatus: () => request<CameraStatus>('/camera/status'),
+
+  cameraStart: (options: {
+    kind: 'opencv' | 'test_image';
+    deviceIndex?: number;
+    images?: string[];
+    batchId?: string;
+    maxWidth?: number;
+    recognizeIntervalMs?: number;
+  }) =>
+    request<CameraStatus>('/camera/start', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }),
+
+  cameraStop: () => request<CameraStatus>('/camera/stop', { method: 'POST' }),
+
+  cameraDevices: () =>
+    request<{ items: Array<{ index: number; width: number; height: number }> }>(
+      '/camera/devices',
+    ),
 };
+
+/** 摄像头预览是图片流，不能走 JSON 客户端。 */
+export function cameraFrameUrl(cacheBuster: number): string {
+  return `${apiBaseUrl()}/camera/frame.jpg?t=${cacheBuster}`;
+}

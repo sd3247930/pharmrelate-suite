@@ -12,6 +12,7 @@ from ..db import Database
 from ..repositories.audit_repository import AuditRepository
 from ..repositories.batch_repository import BatchRepository
 from ..services.scan_service import ScanService
+from ..services.camera import CameraManager
 
 
 def get_batch_repository(request: Request) -> BatchRepository:
@@ -28,3 +29,7 @@ def get_audit_repository(request: Request) -> AuditRepository:
 
 def get_scan_service(request: Request) -> ScanService:
     return request.app.state.scan_service
+
+
+def get_camera_manager(request: Request) -> CameraManager:
+    return request.app.state.camera_manager
