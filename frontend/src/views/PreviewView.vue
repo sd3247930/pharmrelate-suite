@@ -12,7 +12,7 @@ import {
   TriangleAlert,
   Undo2,
 } from 'lucide-vue-next';
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 
 import AppDialog from '../components/AppDialog.vue';
 import AppButton from '../components/AppButton.vue';
@@ -22,6 +22,7 @@ import AppInput from '../components/AppInput.vue';
 import AppStatusBadge from '../components/AppStatusBadge.vue';
 import { ApiError, api } from '../api/client';
 import { useBatchStore } from '../stores/batch';
+import type { Review } from '../types/batch';
 
 /**
  * 界面 4：预览与导出。
@@ -35,6 +36,30 @@ const batch = useBatchStore();
 const loadingSample = ref(false);
 const sampleMessage = ref('');
 const copyState = ref('');
+const review = ref<Review | null>(null);
+const reviewError = ref('');
+
+/** 导出闸门以服务端为准：前端只负责如实呈现，不自行判断能不能导。 */
+const canExport = computed(() => review.value?.canExport ?? false);
+const exportKind = computed(() => review.value?.exportKind ?? 'normal');
+
+async function loadReview(): Promise<void> {
+  if (!batch.batchId) {
+    review.value = null;
+    return;
+  }
+  reviewError.value = '';
+  try {
+    review.value = await api.review(batch.batchId);
+  } catch (error) {
+    review.value = null;
+    reviewError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+onMounted(() => {
+  void loadReview();
+});
 
 // 流转原因 / 解锁原因
 const reasonDialogOpen = ref(false);
@@ -144,6 +169,8 @@ async function submitEarlyEnd(): Promise<void> {
     earlyEndOpen.value = false;
     earlyEndReason.value = '';
     earlyEndNote.value = '';
+    // 提前结束会改变导出闸门，必须重新核对
+    await loadReview();
   }
 }
 </script>
@@ -210,6 +237,131 @@ async function submitEarlyEnd(): Promise<void> {
         <CheckCircle2 :size="16" aria-hidden="true" />
         与基准文件 {{ matchesGolden }} 逐字符完全一致。
       </p>
+    </AppCard>
+
+    <AppCard
+      title="整体核对"
+      subtitle="计划 vs 实际逐罐对照；缺漏槽位默认禁止导出。"
+    >
+      <template #actions>
+        <AppButton variant="ghost" :disabled="!batch.batchId" @click="loadReview">刷新核对</AppButton>
+      </template>
+
+      <p v-if="!batch.batchId" class="preview__hint">
+        尚未保存到本地库。<RouterLink to="/base-info">回到基础信息</RouterLink> 先保存草稿。
+      </p>
+      <p v-else-if="reviewError" class="preview__banner is-warn" role="alert">
+        <TriangleAlert :size="16" aria-hidden="true" />
+        {{ reviewError }}
+      </p>
+
+      <template v-else-if="review">
+        <div class="preview__compare">
+          <table>
+            <thead>
+              <tr>
+                <th>项目</th>
+                <th>计划</th>
+                <th>实际</th>
+                <th>差异</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>罐</td>
+                <td class="code-text">{{ review.plan.canCount }}</td>
+                <td class="code-text">{{ review.actual.canCount }}</td>
+                <td
+                  class="code-text"
+                  :class="{ 'is-bad': review.plan.canCount !== review.actual.canCount }"
+                >
+                  {{ review.actual.canCount - review.plan.canCount }}
+                </td>
+              </tr>
+              <tr>
+                <td>粒子</td>
+                <td class="code-text">{{ review.plan.particleTotal.toLocaleString('en-US') }}</td>
+                <td class="code-text">{{ review.actual.particleTotal.toLocaleString('en-US') }}</td>
+                <td class="code-text" :class="{ 'is-bad': review.missingParticles > 0 }">
+                  {{ review.actual.particleTotal - review.plan.particleTotal }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <table class="preview__per-can">
+          <thead>
+            <tr>
+              <th>罐</th>
+              <th>罐号</th>
+              <th>计划</th>
+              <th>实际</th>
+              <th>缺漏</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in review.perCan" :key="row.index" :class="{ 'is-missing': row.missing > 0 }">
+              <td>{{ row.index }}</td>
+              <td class="code-text">{{ row.canCode || '—' }}</td>
+              <td class="code-text">{{ row.planned }}</td>
+              <td class="code-text">{{ row.scanned }}</td>
+              <!-- 缺漏用红色 + 数字 + 文字三重表达，不只靠颜色 -->
+              <td class="code-text preview__missing">
+                <template v-if="row.missing > 0">
+                  <TriangleAlert :size="14" aria-hidden="true" />
+                  缺 {{ row.missing }}
+                </template>
+                <template v-else>0</template>
+              </td>
+              <td>
+                <span v-if="row.complete" class="preview__tag is-ok">已完成</span>
+                <span v-else-if="row.scanned === 0" class="preview__tag is-empty">未开始</span>
+                <span v-else class="preview__tag is-partial">进行中</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <ul class="preview__checks">
+          <li v-for="item in review.checks" :key="item.code" :class="item.passed ? 'is-ok' : 'is-bad'">
+            <component :is="item.passed ? CheckCircle2 : TriangleAlert" :size="16" aria-hidden="true" />
+            <span>
+              <strong>{{ item.label }}</strong>
+              <em>{{ item.detail }}</em>
+            </span>
+          </li>
+        </ul>
+
+        <ul v-if="review.blocking.length" class="preview__issues">
+          <li v-for="item in review.blocking" :key="item.code" class="is-error">
+            <FileWarning :size="16" aria-hidden="true" />
+            <span>
+              <strong>{{ item.message }}</strong>
+              <em>{{ item.action }}</em>
+            </span>
+          </li>
+        </ul>
+
+        <div class="preview__export">
+          <AppButton
+            variant="primary"
+            :disabled="!canExport"
+            :title="canExport ? '生成 XML / HTML' : '存在未解决的问题，导出已被禁止'"
+          >
+            <template #icon><Download :size="16" aria-hidden="true" /></template>
+            {{ exportKind === 'early_end' ? '生成 XML / HTML（提前结束）' : '生成 XML / HTML' }}
+          </AppButton>
+          <p v-if="!canExport" class="preview__hint">
+            导出已被禁止，请先处理上方问题。
+          </p>
+          <p v-else-if="exportKind === 'early_end'" class="preview__hint">
+            本批为提前结束，导出内容仅包含实际录入数据，并会在审计日志中标记。
+          </p>
+          <p v-else class="preview__hint">核对通过，可以导出。（正式导出在阶段 4 实现）</p>
+        </div>
+      </template>
     </AppCard>
 
     <AppCard
@@ -578,6 +730,104 @@ async function submitEarlyEnd(): Promise<void> {
 .preview__hint {
   font-size: var(--text-sm);
   color: var(--color-text-muted);
+}
+
+.preview__compare table,
+.preview__per-can {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.preview__per-can td,
+.preview__per-can th {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* 缺漏行用左侧色条 + 红字，颜色不是唯一线索 */
+.preview__per-can tr.is-missing {
+  background: var(--color-danger-soft);
+  box-shadow: inset 3px 0 0 var(--color-danger);
+}
+
+.preview__missing {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-danger);
+  font-weight: var(--weight-semibold);
+}
+
+.preview__tag {
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
+  border: 1px solid;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.preview__tag.is-ok {
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border-color: var(--color-success-border);
+}
+
+.preview__tag.is-partial {
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+}
+
+.preview__tag.is-empty {
+  color: var(--color-text-subtle);
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+}
+
+.preview__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preview__checks li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.preview__checks li span {
+  display: flex;
+  flex-direction: column;
+}
+
+.preview__checks li em {
+  font-style: normal;
+  color: var(--color-text-muted);
+}
+
+.preview__checks li.is-ok {
+  color: var(--color-success);
+}
+
+.preview__checks li.is-bad {
+  color: var(--color-danger);
+}
+
+.preview__export {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.is-bad {
+  color: var(--color-danger);
 }
 
 .preview__early-end {

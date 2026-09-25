@@ -14,6 +14,7 @@ from ..repositories.batch_repository import BatchRepository
 from ..services.scan_service import ScanService
 from ..services.camera import CameraManager
 from ..services.scan_history import ScanHistoryService
+from ..services.review_service import ReviewService
 
 
 def get_batch_repository(request: Request) -> BatchRepository:
@@ -38,3 +39,7 @@ def get_camera_manager(request: Request) -> CameraManager:
 
 def get_scan_history(request: Request) -> ScanHistoryService:
     return request.app.state.scan_history
+
+
+def get_review_service(request: Request) -> ReviewService:
+    return request.app.state.review_service

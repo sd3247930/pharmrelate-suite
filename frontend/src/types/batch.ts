@@ -254,6 +254,49 @@ export interface SlotEditResponse {
   actualParticleTotal: number;
 }
 
+// ---------------------------------------------------------------------------
+// 整体核对
+// ---------------------------------------------------------------------------
+
+export interface ReviewCheck {
+  code: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ReviewBlocking {
+  code: string;
+  message: string;
+  action: string;
+}
+
+export interface CanComparison {
+  index: number;
+  planned: number;
+  scanned: number;
+  missing: number;
+  canCode: string;
+  complete: boolean;
+}
+
+export interface Review {
+  batchId: string;
+  batchNo: string;
+  status: string;
+  statusLabel: string;
+  editable: boolean;
+  plan: { canCount: number; particleTotal: number };
+  actual: { canCount: number; particleTotal: number };
+  missingParticles: number;
+  perCan: CanComparison[];
+  checks: ReviewCheck[];
+  blocking: ReviewBlocking[];
+  canExport: boolean;
+  exportKind: 'normal' | 'early_end';
+  earlyEnd: EarlyEnd | null;
+}
+
 /** 条码层级判定，等价于后端的 classify_code。 */
 export function classifyCode(value: string): PackLayer | null {
   if (value.length !== CODE_LENGTH || !/^\d+$/.test(value)) return null;

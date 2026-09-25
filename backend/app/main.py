@@ -27,6 +27,7 @@ from .repositories.audit_repository import AuditRepository
 from .services.scan_service import ScanService
 from .services.camera import CameraManager
 from .services.scan_history import ScanHistoryService
+from .services.review_service import ReviewService
 
 logger = logging.getLogger("pharmrelate.api")
 
@@ -81,6 +82,7 @@ def create_app(database: Database | None = None) -> FastAPI:
         app.state.batch_repository,
         app.state.audit_repository,
     )
+    app.state.review_service = ReviewService(app.state.scan_service)
 
     app.add_middleware(
         CORSMiddleware,

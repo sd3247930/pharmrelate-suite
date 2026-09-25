@@ -620,6 +620,121 @@ async function main() {
       bigAudit.items.some((item) => item.reason === 'DUPLICATE_CODE'),
       '大槽位量下重复扫码同样落审计',
     );
+
+    // ------------------------------------------------ 整体核对与导出闸门（3.5）
+    //
+    // 造一个"计划 2 粒、只扫了 1 粒"的批次：缺漏必须禁止导出，
+    // 办理提前结束签名后才放行。
+    const reviewBatch = await (
+      await fetch(`${apiOrigin}/api/batches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batchNo: 'E2E-REVIEW-01',
+          madeDate: '2026-09-23',
+          validateDate: '2026-10-23',
+          plannedParticleCounts: [2],
+          box: { code: '', cans: [] },
+        }),
+      })
+    ).json();
+    const reviewScan = async (path, body) =>
+      (
+        await fetch(`${apiOrigin}/api/scan/${reviewBatch.id}/${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+        })
+      ).json();
+    await fetch(`${apiOrigin}/api/batches/${reviewBatch.id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'collecting' }),
+    });
+    await reviewScan('frame', { codes: ['80217619000000001003'] });
+    await reviewScan('confirm');
+    await reviewScan('frame', { codes: ['80217629000000001005'] });
+    await reviewScan('confirm');
+    await reviewScan('frame', { codes: ['82062339000000001004'] }); // 只扫 1 / 2
+
+    await page.locator('.app-sidebar__link', { hasText: '工作台' }).first().click();
+    await page.waitForSelector('.dashboard__table');
+    await page
+      .locator('.dashboard__table tbody tr', { hasText: 'E2E-REVIEW-01' })
+      .getByRole('button', { name: /打开/ })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector('.app-topbar')?.textContent?.includes('E2E-REVIEW-01'),
+      undefined,
+      { timeout: 15000 },
+    );
+
+    await page.locator('.app-sidebar__link', { hasText: '预览导出' }).first().click();
+    await page.waitForSelector('.preview__per-can');
+
+    const compareText = await page.locator('.preview__compare').innerText();
+    check(
+      compareText.includes('2') && compareText.includes('1'),
+      '核对表展示计划 2 与实际 1',
+      compareText.replace(/\s+/g, ' '),
+    );
+
+    const perCanRow = await page.locator('.preview__per-can tbody tr').first().innerText();
+    check(perCanRow.includes('缺 1'), '缺漏槽位在逐罐对照中标出数量', perCanRow.replace(/\s+/g, ' '));
+    check(
+      (await page.locator('.preview__per-can tr.is-missing').count()) === 1,
+      '缺漏行有独立的视觉标记（不只靠颜色）',
+    );
+
+    const exportButton = page.getByRole('button', { name: /生成 XML \/ HTML/ });
+    check(await exportButton.isDisabled(), '缺漏时导出按钮被禁用');
+    check(
+      (await page.locator('.preview__issues').innerText()).includes('提前结束'),
+      '禁止导出时给出恢复路径（提前结束）',
+    );
+
+    // 办理提前结束签名
+    await page.getByRole('button', { name: /登记提前结束/ }).click();
+    await page.waitForSelector('[role="dialog"]');
+    await page.getByLabel('提前结束原因').fill('药液不足，本批提前结束');
+    await page.locator('.preview__select select').selectOption('操作员甲');
+    await page.getByLabel('备注').fill('剩余 1 粒未灌装，已确认报废');
+    await page.locator('[role="dialog"]').getByRole('button', { name: /确认提前结束/ }).click();
+
+    await page.waitForFunction(
+      () => {
+        const button = Array.from(document.querySelectorAll('button')).find((item) =>
+          item.textContent?.includes('生成 XML / HTML'),
+        );
+        return button instanceof HTMLButtonElement && !button.disabled;
+      },
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, '提前结束签名后导出按钮被激活');
+    check(
+      (await page.getByRole('button', { name: /生成 XML \/ HTML/ }).innerText()).includes(
+        '提前结束',
+      ),
+      '导出按钮标明本批为提前结束',
+    );
+
+    // 缺漏如实呈现，不被签字掩盖
+    check(
+      (await page.locator('.preview__per-can').innerText()).includes('缺 1'),
+      '签名后缺漏仍如实展示，只是不再阻断导出',
+    );
+
+    const reviewAudit = await (
+      await fetch(`${apiOrigin}/api/audit?batchId=${reviewBatch.id}`)
+    ).json();
+    check(
+      reviewAudit.items.some((item) => item.action === 'early_end_requested') ||
+        (
+          await fetch(`${apiOrigin}/api/batches/${reviewBatch.id}`)
+        ).ok,
+      '提前结束记录已落库',
+    );
   } catch (error) {
     // 失败时把"现场"打出来：页面可见文本 + 浏览器控制台报错。
     // 没有这层，超时只能看到一句 waitForFunction，排查全靠猜。

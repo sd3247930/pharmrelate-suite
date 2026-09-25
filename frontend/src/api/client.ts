@@ -17,6 +17,7 @@ import type {
   HealthResponse,
   ScanSnapshot,
   SlotEditResponse,
+  Review,
   TransitionsResponse,
   XmlPreviewResponse,
 } from '../types/batch';
@@ -272,6 +273,8 @@ export const api = {
 
   scanRedo: (batchId: string) =>
     request<SlotEditResponse>(`/batches/${batchId}/redo`, { method: 'POST' }),
+
+  review: (batchId: string) => request<Review>(`/batches/${batchId}/review`),
 
   // -------------------------------------------------------------- 摄像头
   cameraStatus: () => request<CameraStatus>('/camera/status'),
