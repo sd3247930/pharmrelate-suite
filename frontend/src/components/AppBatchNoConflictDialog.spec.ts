@@ -58,7 +58,9 @@ describe('AppBatchNoConflictDialog', () => {
 
   it('点击「打开已有批次」只触发 openExisting', async () => {
     const wrapper = mountDialog();
-    const button = wrapper.findAll('button').find((item) => item.text().includes('打开已有批次'));
+    const button = wrapper
+      .findAll('.conflict__option')
+      .find((item) => item.text().includes('打开已有批次'));
     expect(button).toBeTruthy();
     await button!.trigger('click');
     expect(wrapper.emitted('openExisting')).toHaveLength(1);
@@ -68,7 +70,9 @@ describe('AppBatchNoConflictDialog', () => {
 
   it('点击「创建新版本」只触发 createNewVersion', async () => {
     const wrapper = mountDialog();
-    const button = wrapper.findAll('button').find((item) => item.text().includes('创建新版本'));
+    const button = wrapper
+      .findAll('.conflict__option')
+      .find((item) => item.text().includes('创建新版本'));
     await button!.trigger('click');
     expect(wrapper.emitted('createNewVersion')).toHaveLength(1);
     expect(wrapper.emitted('openExisting')).toBeUndefined();
@@ -76,10 +80,20 @@ describe('AppBatchNoConflictDialog', () => {
 
   it('点击「取消并返回修改」只触发 cancel', async () => {
     const wrapper = mountDialog();
-    const button = wrapper.findAll('button').find((item) => item.text().includes('取消并返回修改'));
+    const button = wrapper
+      .findAll('.conflict__option')
+      .find((item) => item.text().includes('取消并返回修改'));
     await button!.trigger('click');
     expect(wrapper.emitted('cancel')).toHaveLength(1);
     expect(wrapper.emitted('openExisting')).toBeUndefined();
     expect(wrapper.emitted('createNewVersion')).toBeUndefined();
+  });
+
+  it('弹窗里「取消并返回修改」只有一个按钮，不与底部确认按钮重名', () => {
+    const wrapper = mountDialog();
+    const matches = wrapper
+      .findAll('button')
+      .filter((item) => item.text().includes('取消并返回修改'));
+    expect(matches).toHaveLength(1);
   });
 });

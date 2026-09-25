@@ -173,8 +173,22 @@ class SqliteBatchRepository:
     def _insert_codes(
         self, connection: sqlite3.Connection, batch_id: str, batch: Batch, timestamp: str
     ) -> None:
+        """写入条码行。
+
+        空结构草稿（界面 1 已保存、尚未生成包装结构）不应该产生任何条码行 ——
+        数据库里的 cur_code 不允许为空，而且"还没有结构"本来就不该伪装成
+        一条空条码。此时只留 batch 行。
+        """
+
         rows: list[tuple[object, ...]] = []
+        emitted: set[str] = set()
         for seq, (cur_code, pack_layer, parent_code) in enumerate(batch.iter_export_nodes()):
+            if not cur_code.strip():
+                continue
+            # 父没有落库，子就不能落库：否则会插入悬空条码，触发器也会拒绝。
+            # 这条同时覆盖"空箱号 → 其下全部跳过"和"空罐号 → 其下粒子跳过"。
+            if parent_code is not None and parent_code not in emitted:
+                continue
             planned: int | None = None
             if pack_layer == 2:
                 can = next((item for item in batch.box.cans if item.code == cur_code), None)
@@ -192,6 +206,7 @@ class SqliteBatchRepository:
                     timestamp,
                 )
             )
+            emitted.add(cur_code)
 
         connection.executemany(
             """

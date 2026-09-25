@@ -11,6 +11,7 @@
 
 param(
     [switch]$SkipFrontendBuild,
+    [switch]$SkipE2E,
     [switch]$SkipDesktop
 )
 
@@ -80,6 +81,11 @@ Invoke-Step -Name '前端单元测试（路由 + 条码规则）' -WorkingDirect
 if (-not $SkipFrontendBuild) {
     Invoke-Step -Name '前端类型检查与构建' -WorkingDirectory $frontendDir `
         -Command @('npm', 'run', 'build')
+}
+
+if (-not $SkipE2E) {
+    Invoke-Step -Name '真实浏览器 UI 冒烟（Playwright）' -WorkingDirectory $frontendDir `
+        -Command @('npm', 'run', 'e2e')
 }
 
 if (-not $SkipDesktop) {

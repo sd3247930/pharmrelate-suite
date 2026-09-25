@@ -45,4 +45,31 @@ describe('AppStatusBadge', () => {
     expect(wrapper.text()).toContain('采集中');
     expect(wrapper.text()).toContain('4 台设备');
   });
+
+  const BACKEND_STATUSES: Array<{ status: string; expected: string }> = [
+    { status: 'draft', expected: '草稿' },
+    { status: 'collecting', expected: '采集中' },
+    { status: 'pending_review', expected: '待核对' },
+    { status: 'verified', expected: '已核对' },
+    { status: 'exported', expected: '已导出' },
+    { status: 'locked', expected: '已锁定' },
+    { status: 'archived', expected: '已归档' },
+    { status: 'void', expected: '已作废' },
+  ];
+
+  // 回归用例：pending_review 与 pending 不同名，页面直接传后端状态时曾经整块崩掉
+  it.each(BACKEND_STATUSES)(
+    '直接传后端状态「$status」也能正确渲染为「$expected」',
+    ({ status, expected }) => {
+      const wrapper = mount(AppStatusBadge, { props: { tone: status } });
+      expect(wrapper.text()).toContain(expected);
+      expect(wrapper.find('svg').exists()).toBe(true);
+    },
+  );
+
+  it('未知状态降级渲染，不抛异常也不白屏', () => {
+    const wrapper = mount(AppStatusBadge, { props: { tone: '某种没见过的状态' } });
+    expect(wrapper.text()).toContain('未知状态');
+    expect(wrapper.find('svg').exists()).toBe(true);
+  });
 });

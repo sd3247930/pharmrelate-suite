@@ -77,12 +77,20 @@ def _check_code(value: str, expected_layer: int, field: str) -> list[BatchIssue]
     return issues
 
 
-def validate_batch(batch: Batch) -> list[BatchIssue]:
-    """返回该批次的全部校验问题，按严重程度与出现顺序排列。"""
+def validate_base_info(batch: Batch) -> list[BatchIssue]:
+    """只校验界面 1 的基础信息。
+
+    draft 状态的定义就是「界面 1 已保存，尚未生成包装结构」，
+    因此这个阶段绝不能因为结构为空而拦下保存。
+    """
 
     issues: list[BatchIssue] = []
 
-    # ---- 基础信息 ----
+    if not batch.batch_no.strip():
+        issues.append(
+            BatchIssue(SEVERITY_ERROR, "BATCH_NO_REQUIRED", "batchNo", "批号不能为空。")
+        )
+
     made = _parse_date(batch.made_date)
     valid = _parse_date(batch.validate_date)
     if made is None:
@@ -103,6 +111,39 @@ def validate_batch(batch: Batch) -> list[BatchIssue]:
             )
         )
 
+    return issues
+
+
+def validate_box_code(batch: Batch) -> list[BatchIssue]:
+    """只校验箱号。
+
+    箱号在基础信息页就可以录入，此时包装结构往往还是空的，
+    因此这里采取"填了就检查、没填不追问"的规则。
+    """
+
+    if not batch.box.code.strip():
+        return []
+    return _check_code(batch.box.code, 3, "box.code")
+
+
+def structure_started(batch: Batch) -> bool:
+    """包装结构是否已经动笔。
+
+    判定依据是**罐层面**有没有数据，而不是箱号：箱号在基础信息页就能填，
+    它单独存在并不代表包装结构已经开始配置。
+    """
+
+    return any(
+        can.code.strip() or can.particles or can.planned_particle_count
+        for can in batch.box.cans
+    )
+
+
+def validate_can_structure(batch: Batch) -> list[BatchIssue]:
+    """校验罐与粒子：罐数范围、罐号、计划粒子数、层级前缀、全局去重。"""
+
+    issues: list[BatchIssue] = []
+
     # ---- 包装结构 ----
     can_count = batch.can_count
     if not MIN_CANS <= can_count <= MAX_CANS:
@@ -114,9 +155,6 @@ def validate_batch(batch: Batch) -> list[BatchIssue]:
                 f"罐数必须在 {MIN_CANS}～{MAX_CANS} 之间，当前为 {can_count}。",
             )
         )
-
-    # ---- 箱号 ----
-    issues.extend(_check_code(batch.box.code, 3, "box.code"))
 
     # ---- 罐号与粒子 ----
     for can in batch.box.cans:
@@ -179,6 +217,54 @@ def validate_batch(batch: Batch) -> list[BatchIssue]:
             )
         )
 
+    return issues
+
+
+def validate_structure(batch: Batch) -> list[BatchIssue]:
+    """严格模式：箱号必填 + 罐结构完整。
+
+    只在"生成扫码网格"这类真正需要完整结构的时机使用，
+    不能拿它当保存草稿的守门人，否则界面 1 一保存就会被拦。
+    """
+
+    issues: list[BatchIssue] = []
+    if not batch.box.code.strip():
+        issues.append(
+            BatchIssue(
+                SEVERITY_ERROR,
+                "BOX_CODE_REQUIRED",
+                "box.code",
+                "生成扫码网格前必须填写箱号。",
+            )
+        )
+    else:
+        issues.extend(_check_code(batch.box.code, 3, "box.code"))
+    issues.extend(validate_can_structure(batch))
+    return issues
+
+
+def validate_batch(batch: Batch, *, include_structure: bool = True) -> list[BatchIssue]:
+    """返回该批次的全部校验问题，按严重程度与出现顺序排列。"""
+
+    issues = validate_base_info(batch)
+    if include_structure:
+        issues.extend(validate_structure(batch))
+    return issues
+
+
+def validate_partial(batch: Batch) -> list[BatchIssue]:
+    """保存草稿用的宽松校验：基础信息 + 已填写的部分。
+
+    规则是"填了就检查、没填不追问"：
+        - 基础信息：任何时候都必须合法
+        - 箱号：填了就验证格式与前缀
+        - 罐结构：只有真正动笔（罐号/粒子/计划数）才整体校验
+    """
+
+    issues = validate_base_info(batch)
+    issues.extend(validate_box_code(batch))
+    if structure_started(batch):
+        issues.extend(validate_can_structure(batch))
     return issues
 
 

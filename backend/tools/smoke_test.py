@@ -232,8 +232,8 @@ def main() -> int:
         status, storage = get_json(f"{base}/api/system/storage")
         in_temp = isinstance(storage, dict) and data_dir.name in str(storage.get("databasePath", ""))
         check(
-            status == 200 and storage.get("schemaVersion") == "2" and in_temp,
-            "本地库落在用户数据目录且 schema 版本为 2",
+            status == 200 and storage.get("schemaVersion") == "3" and in_temp,
+            "本地库落在用户数据目录且 schema 版本为 3",
         )
 
         batch_id = created.get("id")

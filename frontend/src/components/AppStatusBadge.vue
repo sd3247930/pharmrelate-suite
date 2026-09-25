@@ -33,7 +33,15 @@ export type StatusTone =
   | 'conflict';
 
 const props = defineProps<{
-  tone: StatusTone;
+  /**
+   * 可以直接传生命周期状态（draft / pending_review / …），也可以传视觉 tone。
+   *
+   * 之所以允许两种：调用方手里拿到的通常是后端返回的状态字符串，
+   * 强制每个页面各自做一次映射，只要漏一个就会出现"未知状态"甚至渲染崩溃
+   * （pending_review 与 pending 不同名，正是这个坑）。映射集中放在这里，
+   * 是唯一不会漏的方式。
+   */
+  tone: StatusTone | string;
   label?: string;
   detail?: string;
 }>();
@@ -56,12 +64,38 @@ const TONES: Record<StatusTone, ToneSpec> = {
   conflict: { icon: GitMerge, label: '冲突' },
 };
 
-const spec = computed(() => TONES[props.tone]);
+/** 后端生命周期状态 → 视觉 tone。 */
+const STATUS_TO_TONE: Record<string, StatusTone> = {
+  draft: 'draft',
+  collecting: 'collecting',
+  pending_review: 'pending',
+  verified: 'verified',
+  exported: 'exported',
+  locked: 'locked',
+  archived: 'archived',
+  void: 'void',
+  offline: 'offline',
+  conflict: 'conflict',
+};
+
+/** 兜底：遇到未知状态也要能渲染，绝不能因为一个没映射的值让整页白屏。 */
+const UNKNOWN: ToneSpec = { icon: AlertCircle, label: '未知状态' };
+
+const spec = computed<ToneSpec>(() => {
+  const raw = String(props.tone);
+  const tone = STATUS_TO_TONE[raw] ?? (raw as StatusTone);
+  return TONES[tone] ?? UNKNOWN;
+});
+const toneClass = computed(() => {
+  const raw = String(props.tone);
+  const tone = STATUS_TO_TONE[raw] ?? (raw as StatusTone);
+  return TONES[tone] ? tone : 'draft';
+});
 const text = computed(() => props.label ?? spec.value.label);
 </script>
 
 <template>
-  <span class="app-status-badge" :class="`app-status-badge--${tone}`">
+  <span class="app-status-badge" :class="`app-status-badge--${toneClass}`">
     <component :is="spec.icon" :size="14" aria-hidden="true" />
     <span class="app-status-badge__text">{{ text }}</span>
     <span v-if="detail" class="app-status-badge__detail">{{ detail }}</span>

@@ -19,6 +19,7 @@ const props = withDefaults(
     cancelLabel?: string;
     tone?: 'normal' | 'danger';
     busy?: boolean;
+    hideConfirm?: boolean;
   }>(),
   {
     description: '',
@@ -26,6 +27,7 @@ const props = withDefaults(
     cancelLabel: '取消',
     tone: 'normal',
     busy: false,
+    hideConfirm: false,
   },
 );
 
@@ -81,6 +83,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
         <footer class="app-dialog__footer" :class="{ 'app-dialog__footer--danger': tone === 'danger' }">
           <AppButton variant="secondary" :disabled="busy" @click="close">{{ cancelLabel }}</AppButton>
           <AppButton
+            v-if="!hideConfirm"
             :variant="tone === 'danger' ? 'danger' : 'primary'"
             :loading="busy"
             @click="emit('confirm')"

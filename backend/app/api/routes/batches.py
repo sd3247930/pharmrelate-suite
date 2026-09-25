@@ -14,7 +14,12 @@ from fastapi import APIRouter, Depends, Query
 
 from ...domain import batch_state as state
 from ...domain.models import Batch, EarlyEnd
-from ...domain.validation import has_blocking_issue, validate_batch
+from ...domain.validation import (
+    has_blocking_issue,
+    validate_batch,
+    validate_partial,
+    validate_structure,
+)
 from ...repositories.batch_repository import BatchRecord, BatchRepository
 from ...schemas.batch import (
     BatchCreatePayload,
@@ -85,8 +90,10 @@ def _assert_editable(record: BatchRecord) -> None:
         )
 
 
-def _validate_or_raise(batch: Batch) -> None:
-    issues = validate_batch(batch)
+def _validate_partial_or_raise(batch: Batch) -> None:
+    """保存草稿用的宽松校验：基础信息必查，已填写的部分必查，没填的不追问。"""
+
+    issues = validate_partial(batch)
     if has_blocking_issue(issues):
         raise ValidationFailedError(
             "批次数据校验未通过。",
@@ -189,7 +196,7 @@ def create_batch(
     repository: BatchRepository = Depends(get_batch_repository),
 ) -> dict[str, object]:
     batch = payload.to_domain()
-    _validate_or_raise(batch)
+    _validate_partial_or_raise(batch)
 
     existing = repository.find_by_batch_no(batch.batch_no)
     if existing is not None and not payload.force_new_version:
@@ -257,7 +264,7 @@ def update_batch(
             detail={"reason": "BATCH_NO_EXISTS", "existingId": duplicate.id},
         )
 
-    _validate_or_raise(batch)
+    _validate_partial_or_raise(batch)
     batch.early_end = record.batch.early_end  # 提前结束记录只能由专用接口修改
 
     updated = repository.update(batch_id, batch)
@@ -309,6 +316,19 @@ def change_status(
                 "targetLabel": state.label_of(payload.target),
             },
         )
+
+    # 生成扫码网格（draft → collecting）意味着结构必须已经完整可扫，
+    # 否则会生成一堆填不满的槽位。
+    if record.status == state.STATUS_DRAFT and payload.target == state.STATUS_COLLECTING:
+        issues = validate_structure(record.batch)
+        if has_blocking_issue(issues):
+            raise ValidationFailedError(
+                "生成扫码网格前，包装结构必须完整且自洽。",
+                detail={
+                    "reason": "STRUCTURE_INCOMPLETE",
+                    "issues": [issue.to_dict() for issue in issues],
+                },
+            )
 
     updated = repository.set_status(batch_id, payload.target)
     if updated is None:  # pragma: no cover

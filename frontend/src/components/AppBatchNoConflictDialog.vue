@@ -34,10 +34,9 @@ function toneOf(status: string): string {
     :model-value="modelValue"
     title="检测到批号已存在"
     :busy="busy"
-    confirm-label="取消并返回修改"
     cancel-label="关闭"
+    hide-confirm
     @update:model-value="emit('update:modelValue', $event)"
-    @confirm="emit('cancel')"
   >
     <template v-if="conflict">
       <dl class="conflict__facts">

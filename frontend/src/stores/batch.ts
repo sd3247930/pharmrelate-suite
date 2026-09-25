@@ -114,7 +114,10 @@ export const useBatchStore = defineStore('batch', () => {
     madeDate.value = payload.madeDate;
     validateDate.value = payload.validateDate;
     boxCode.value = payload.box.code;
-    cans.value = payload.box.cans.map((can) => ({ ...can, particles: [...can.particles] }));
+    const loaded = payload.box.cans.map((can) => ({ ...can, particles: [...can.particles] }));
+    // 后端对"还没生成包装结构"的草稿会返回 0 个罐；界面必须始终有可编辑的罐位，
+    // 否则刚存完草稿就看不到罐数控件了。
+    cans.value = loaded.length ? loaded : [emptyCan(1)];
   }
 
   /**
@@ -268,15 +271,17 @@ export const useBatchStore = defineStore('batch', () => {
     busy.value = true;
     errorMessage.value = '';
     notice.value = '';
+    // 必须在 applyDetail 之前取：applyDetail 会写入 batchId，之后再读 isNew 就永远是 false
+    const wasNew = isNew.value;
     try {
       const payload = toPayload();
-      const detail = isNew.value
+      const detail = wasNew
         ? await api.createBatch(payload, forceNewVersion)
         : await api.updateBatch(batchId.value, payload);
       applyDetail(detail);
       await refreshTransitions();
       await refreshBatchList();
-      notice.value = isNew.value ? '批次已创建' : '已保存';
+      notice.value = wasNew ? '批次已创建' : '已保存';
       return true;
     } catch (error) {
       if (error instanceof ApiError) {

@@ -109,6 +109,52 @@ CREATE INDEX IF NOT EXISTS ix_code_batch_layer_seq ON code (batch_id, pack_layer
 CREATE INDEX IF NOT EXISTS ix_code_parent ON code (batch_id, parent_code);
 
 -- ---------------------------------------------------------------------------
+-- parentCode 完整性
+--
+-- 单表方案下 parent_code 只是文本，光靠 CHECK 只能保证"有没有父"，
+-- 不能保证"父真的存在"。下面两个触发器补上这一层，并顺带强制导出顺序：
+--   1. 父码必须存在于同一批次；
+--   2. 父的层级必须是 当前层级 + 1（罐的父是箱，粒子的父是罐）；
+--   3. 父必须排在子之前（seq 更小）—— 这正是 XML 基准要求的
+--      "箱 → 罐 → 该罐的粒子"顺序，把它交给数据库守，而不是靠调用方自觉；
+--   4. 顺带排除自己当自己的父（父的 seq 不可能小于自身）。
+-- ---------------------------------------------------------------------------
+CREATE TRIGGER IF NOT EXISTS trg_code_parent_insert
+BEFORE INSERT ON code
+FOR EACH ROW
+WHEN NEW.parent_code IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'parentCode 无效：父码必须存在于同批次、层级正确且排在子码之前')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code AS parent
+        WHERE parent.batch_id  = NEW.batch_id
+          AND parent.cur_code  = NEW.parent_code
+          AND parent.deleted   = 0
+          AND parent.pack_layer = NEW.pack_layer + 1
+          AND parent.seq       < NEW.seq
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_code_parent_update
+BEFORE UPDATE OF parent_code, seq, pack_layer, batch_id, deleted ON code
+FOR EACH ROW
+WHEN NEW.parent_code IS NOT NULL AND NEW.deleted = 0
+BEGIN
+    SELECT RAISE(ABORT, 'parentCode 无效：父码必须存在于同批次、层级正确且排在子码之前')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM code AS parent
+        WHERE parent.batch_id  = NEW.batch_id
+          AND parent.cur_code  = NEW.parent_code
+          AND parent.deleted   = 0
+          AND parent.pack_layer = NEW.pack_layer + 1
+          AND parent.seq       < NEW.seq
+          AND parent.id        <> NEW.id
+    );
+END;
+
+-- ---------------------------------------------------------------------------
 -- 按层级阅读的视图
 -- ---------------------------------------------------------------------------
 CREATE VIEW IF NOT EXISTS v_box AS
