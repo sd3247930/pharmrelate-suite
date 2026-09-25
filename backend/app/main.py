@@ -23,6 +23,8 @@ from .api.errors import register_exception_handlers
 from .db import Database
 from .logging_config import configure_logging
 from .repositories.sqlite_repository import SqliteBatchRepository
+from .repositories.audit_repository import AuditRepository
+from .services.scan_service import ScanService
 
 logger = logging.getLogger("pharmrelate.api")
 
@@ -66,6 +68,10 @@ def create_app(database: Database | None = None) -> FastAPI:
     # （安装目录通常无写权限，且卸载/升级容易把它清掉）。
     app.state.database = database or Database()
     app.state.batch_repository = SqliteBatchRepository(app.state.database)
+    app.state.audit_repository = AuditRepository(app.state.database)
+    app.state.scan_service = ScanService(
+        app.state.batch_repository, app.state.audit_repository
+    )
 
     app.add_middleware(
         CORSMiddleware,

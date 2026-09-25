@@ -86,6 +86,14 @@ def post_json(url: str, payload: object) -> tuple[int, object]:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def read_log_tail(path: Path, lines: int = 25) -> str:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return "（无法读取服务日志）"
+    return "\n".join(content[-lines:])
+
+
 def build_payload(batch_no: str, cans: list[dict[str, object]]) -> dict[str, object]:
     return {
         "batchNo": batch_no,
@@ -128,6 +136,11 @@ def main() -> int:
     # 关键：冒烟测试必须用临时数据目录，否则会往开发机真实本地库里塞测试批次
     data_dir = tempfile.TemporaryDirectory(prefix="pharmrelate-smoke-")
     environment = {**os.environ, "PHARMRELATE_DATA_DIR": data_dir.name}
+    # 子进程输出必须重定向到文件，不能接 PIPE：
+    # uvicorn 每个请求都打一行日志，管道缓冲区填满后子进程会阻塞在写日志上，
+    # 表现为请求永久挂起（实际踩过一次，排查了很久）。
+    log_path = Path(data_dir.name) / "uvicorn.log"
+    log_file = log_path.open("w", encoding="utf-8")
 
     def check(condition: bool, label: str, extra: str = "") -> None:
         mark = " OK " if condition else "FAIL"
@@ -150,11 +163,8 @@ def main() -> int:
         ],
         cwd=str(BACKEND_DIR),
         env=environment,
-        stdout=subprocess.PIPE,
+        stdout=log_file,
         stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
     )
 
     try:
@@ -174,9 +184,7 @@ def main() -> int:
 
         if health is None:
             print("[FAIL] 服务未能在超时内就绪")
-            output = process.stdout.read() if process.stdout else ""
-            if output:
-                print(output[-2000:])
+            print(read_log_tail(log_path))
             return 1
 
         print()
@@ -311,12 +319,95 @@ def main() -> int:
             f"{listing.get('total')} 条",
         )
 
+        # ---- 阶段 3.2 第一批：扫码状态机（模拟扫描事件，不依赖硬件）----
+        _, scan_batch = post_json(
+            f"{base}/api/batches",
+            {
+                "batchNo": "SMOKE-SCAN-01",
+                "madeDate": "2026-09-23",
+                "validateDate": "2026-10-23",
+                "plannedParticleCounts": [2],
+                "box": {"code": "", "cans": []},
+            },
+        )
+        scan_id = scan_batch.get("id")
+        post_json(f"{base}/api/batches/{scan_id}/status", {"target": "collecting"})
+
+        def scan(path: str, body: object | None = None):
+            if body is None:
+                return post_json(f"{base}/api/scan/{scan_id}/{path}", {})
+            return post_json(f"{base}/api/scan/{scan_id}/{path}", body)
+
+        _, snap = get_json(f"{base}/api/scan/{scan_id}/session")
+        check(snap.get("status") == "box_scanning", "扫码会话从拍箱号开始", snap.get("statusLabel", ""))
+
+        _, snap = scan("frame", {"codes": ["80217619000000001003", "80217619000000001004"]})
+        event = snap.get("lastEvent", {})
+        check(
+            event.get("code") == "MULTI_CODE" and event.get("needsAlarm") is True,
+            "拍箱多码触发报警并阻断",
+        )
+
+        _, snap = scan("frame", {"codes": ["82062339000000001004"]})
+        check(snap.get("lastEvent", {}).get("code") == "WRONG_LAYER", "错层条码被即时拦截")
+
+        scan("frame", {"codes": ["80217619000000001003"]})
+        _, snap = scan("confirm")
+        check(snap.get("status") == "can_scanning", "箱号确认后进入拍罐号")
+
+        scan("frame", {"codes": ["80217629000000001005"]})
+        _, snap = scan("confirm")
+        check(snap.get("status") == "particle_scanning", "罐号确认后进入拍粒子")
+
+        _, snap = scan("frame", {"codes": ["82062339000000001004"]})
+        check(snap.get("currentCanScanned") == 1, "粒子按采集顺序入格", "1/2")
+
+        _, snap = scan(
+            "frame",
+            {"codes": ["82062339000000001001", "82062339000000001003"]},
+        )
+        check(
+            snap.get("lastEvent", {}).get("code") == "OVERFLOW"
+            and snap.get("currentCanScanned") == 1,
+            "溢出整帧拒绝，不部分写入",
+        )
+
+        _, snap = scan("frame", {"codes": ["82062339000000001001"]})
+        check(snap.get("status") == "can_review", "满额后进入本罐核对")
+
+        _, snap = scan("confirm")
+        check(snap.get("status") == "overall_review", "全部罐完成后进入整体核对")
+
+        status, audit = get_json(f"{base}/api/audit?batchId={scan_id}")
+        entries = audit.get("items", [])
+        reasons = {entry.get("reason") for entry in entries}
+        check(
+            status == 200
+            and "MULTI_CODE" in reasons
+            and "WRONG_LAYER" in reasons
+            and "OVERFLOW" in reasons,
+            "报警与拦截全部落审计日志",
+            f"{len(entries)} 条",
+        )
+
+        status, conflict_audit = get_json(
+            f"{base}/api/audit?batchId={scan_id}&action=scan_conflict"
+        )
+        check(
+            status == 200 and conflict_audit.get("total", -1) >= 0,
+            "冲突审计查询可用",
+        )
+
     finally:
         process.terminate()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
+        log_file.close()
+        if failures:
+            print("\n---- 服务日志末尾 ----")
+            print(read_log_tail(log_path))
         data_dir.cleanup()
 
     print()

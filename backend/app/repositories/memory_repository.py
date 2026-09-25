@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 
 from ..domain.batch_state import STATUS_DRAFT
-from ..domain.models import Batch, EarlyEnd
+from ..domain.models import Batch, CanCode, EarlyEnd
 from .batch_repository import BatchRecord
 
 
@@ -106,3 +106,48 @@ class InMemoryBatchRepository:
             record.revision += 1
             record.updated_at = _now()
             return record
+
+    # ------------------------------------------------------- 扫码增量写入
+    # 与 SQLite 实现保持同一协议，便于测试里替换而不改调用方。
+
+    def _touch(self, record: BatchRecord) -> BatchRecord:
+        record.revision += 1
+        record.updated_at = _now()
+        return record
+
+    def set_box_code(self, batch_id: str, code: str) -> BatchRecord | None:
+        with self._lock:
+            record = self._records.get(batch_id)
+            if record is None or record.deleted:
+                return None
+            record.batch.box.code = code
+            return self._touch(record)
+
+    def add_can(self, batch_id: str, code: str, planned_particle_count: int) -> BatchRecord | None:
+        with self._lock:
+            record = self._records.get(batch_id)
+            if record is None or record.deleted:
+                return None
+            record.batch.box.cans.append(
+                CanCode(
+                    index=len(record.batch.box.cans) + 1,
+                    code=code,
+                    planned_particle_count=planned_particle_count,
+                )
+            )
+            return self._touch(record)
+
+    def append_particles(
+        self, batch_id: str, can_code: str, codes: list[str]
+    ) -> BatchRecord | None:
+        with self._lock:
+            record = self._records.get(batch_id)
+            if record is None or record.deleted:
+                return None
+            can = next(
+                (item for item in record.batch.box.cans if item.code == can_code), None
+            )
+            if can is None:
+                raise ValueError(f"批次内找不到罐 {can_code}")
+            can.particles.extend(codes)
+            return self._touch(record)

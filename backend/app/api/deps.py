@@ -9,7 +9,9 @@ from __future__ import annotations
 from fastapi import Request
 
 from ..db import Database
+from ..repositories.audit_repository import AuditRepository
 from ..repositories.batch_repository import BatchRepository
+from ..services.scan_service import ScanService
 
 
 def get_batch_repository(request: Request) -> BatchRepository:
@@ -18,3 +20,11 @@ def get_batch_repository(request: Request) -> BatchRepository:
 
 def get_database(request: Request) -> Database:
     return request.app.state.database
+
+
+def get_audit_repository(request: Request) -> AuditRepository:
+    return request.app.state.audit_repository
+
+
+def get_scan_service(request: Request) -> ScanService:
+    return request.app.state.scan_service

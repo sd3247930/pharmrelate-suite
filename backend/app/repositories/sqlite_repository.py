@@ -357,6 +357,117 @@ class SqliteBatchRepository:
                 return None
         return self.get(batch_id)
 
+    # ------------------------------------------------------------------
+    # 扫码增量写入
+    #
+    # 扫码是逐条发生的（一罐最多 2500 粒），绝不能每扫一条就把整批条码
+    # 删掉重建 —— 那是 O(n²)。这里只做单行 INSERT/UPDATE。
+    #
+    # seq 取当前批次最大值 +1：导出顺序 = 采集顺序，父先于子，
+    # 于是 D-010 的触发器约束天然成立。
+    # ------------------------------------------------------------------
+
+    def _next_seq(self, connection: sqlite3.Connection, batch_id: str) -> int:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM code WHERE batch_id = ?",
+            (batch_id,),
+        ).fetchone()
+        return int(row["next_seq"])
+
+    def set_box_code(self, batch_id: str, code: str) -> BatchRecord | None:
+        timestamp = _now()
+        with self._db.transaction() as connection:
+            exists = connection.execute(
+                "SELECT id FROM batch WHERE id = ? AND deleted = 0", (batch_id,)
+            ).fetchone()
+            if exists is None:
+                return None
+            connection.execute(
+                "DELETE FROM code WHERE batch_id = ? AND pack_layer = 3", (batch_id,)
+            )
+            connection.execute(
+                """
+                INSERT INTO code
+                    (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                     planned_particle_count, created_at, updated_at)
+                VALUES (?, ?, ?, 3, NULL, 0, NULL, ?, ?)
+                """,
+                (str(uuid.uuid4()), batch_id, code, timestamp, timestamp),
+            )
+            connection.execute(
+                "UPDATE batch SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (timestamp, batch_id),
+            )
+        return self.get(batch_id)
+
+    def add_can(self, batch_id: str, code: str, planned_particle_count: int) -> BatchRecord | None:
+        timestamp = _now()
+        with self._db.transaction() as connection:
+            box = connection.execute(
+                "SELECT cur_code FROM code WHERE batch_id = ? AND pack_layer = 3 AND deleted = 0",
+                (batch_id,),
+            ).fetchone()
+            if box is None:
+                raise ValueError("批次还没有箱号，无法添加罐")
+            seq = self._next_seq(connection, batch_id)
+            connection.execute(
+                """
+                INSERT INTO code
+                    (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                     planned_particle_count, created_at, updated_at)
+                VALUES (?, ?, ?, 2, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    batch_id,
+                    code,
+                    box["cur_code"],
+                    seq,
+                    planned_particle_count,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute(
+                "UPDATE batch SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (timestamp, batch_id),
+            )
+        return self.get(batch_id)
+
+    def append_particles(
+        self, batch_id: str, can_code: str, codes: list[str]
+    ) -> BatchRecord | None:
+        if not codes:
+            return self.get(batch_id)
+
+        timestamp = _now()
+        with self._db.transaction() as connection:
+            can = connection.execute(
+                "SELECT cur_code FROM code WHERE batch_id = ? AND cur_code = ? AND pack_layer = 2 AND deleted = 0",
+                (batch_id, can_code),
+            ).fetchone()
+            if can is None:
+                raise ValueError(f"批次内找不到罐 {can_code}")
+
+            start = self._next_seq(connection, batch_id)
+            connection.executemany(
+                """
+                INSERT INTO code
+                    (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                     planned_particle_count, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?, NULL, ?, ?)
+                """,
+                [
+                    (str(uuid.uuid4()), batch_id, code, can_code, start + offset, timestamp, timestamp)
+                    for offset, code in enumerate(codes)
+                ],
+            )
+            connection.execute(
+                "UPDATE batch SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (timestamp, batch_id),
+            )
+        return self.get(batch_id)
+
     def set_early_end(self, batch_id: str, early_end: EarlyEnd | None) -> BatchRecord | None:
         timestamp = _now()
         with self._db.transaction() as connection:
