@@ -13,6 +13,7 @@ from ..repositories.audit_repository import AuditRepository
 from ..repositories.batch_repository import BatchRepository
 from ..services.scan_service import ScanService
 from ..services.camera import CameraManager
+from ..services.scan_history import ScanHistoryService
 
 
 def get_batch_repository(request: Request) -> BatchRepository:
@@ -33,3 +34,7 @@ def get_scan_service(request: Request) -> ScanService:
 
 def get_camera_manager(request: Request) -> CameraManager:
     return request.app.state.camera_manager
+
+
+def get_scan_history(request: Request) -> ScanHistoryService:
+    return request.app.state.scan_history

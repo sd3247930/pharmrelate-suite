@@ -38,7 +38,7 @@ class PersistenceTests(unittest.TestCase):
     def test_schema_version_is_recorded(self) -> None:
         database = Database(self.db_path)
         database.initialise()
-        self.assertEqual(database.schema_version(), "4")
+        self.assertEqual(database.schema_version(), "5")
 
     def test_data_survives_reopen(self) -> None:
         """模拟"重启进程"：换一个 Database 实例打开同一个文件。"""

@@ -9,6 +9,10 @@ import {
   RotateCcw,
   ScanLine,
   TriangleAlert,
+  Trash2,
+  Undo2,
+  Redo2,
+  RefreshCw,
   Volume2,
   VolumeX,
 } from 'lucide-vue-next';
@@ -31,6 +35,8 @@ import {
 import { useBatchStore } from '../stores/batch';
 import { useScanStore } from '../stores/scan';
 import { classifyCode, CODE_LENGTH, LAYER_LABELS } from '../types/batch';
+import type { CanPayload } from '../types/batch';
+import { buildSlots, slotsOfCan, summarizeSlots, type Slot } from '../services/slotGrid';
 
 /**
  * 界面 3：扫码采集。
@@ -50,6 +56,9 @@ const frameTick = ref(0);
 const alarmSettings = ref(getAlarmSettings());
 const audioReady = ref(isUnlocked());
 const probe = ref('');
+const selectedSlot = ref<Slot | null>(null);
+const replaceCode = ref('');
+const replaceError = ref('');
 let frameTimer: number | undefined;
 
 const batchId = computed(() => batch.batchId);
@@ -79,6 +88,52 @@ const stageHint = computed(() => {
       return '当前状态不需要扫描，请按下方提示操作';
   }
 });
+
+/**
+ * 槽位视图由「计划 + 实际」两个来源合成：槽位数来自计划，条码来自实际。
+ * 因此缺漏槽位天然可见（空槽），扫描超出计划也会被标成冲突而不是悄悄丢掉。
+ */
+const currentSlots = computed(() => {
+  const plan = scan.snapshot?.canPlan ?? [];
+  const cans: CanPayload[] = (scan.snapshot?.canPlan ?? []).map((planned, offset) => ({
+    index: offset + 1,
+    code: scan.snapshot?.canCodes[offset] ?? '',
+    plannedParticleCount: planned,
+    particles: scan.snapshot?.canParticles[offset] ?? [],
+  }));
+  return slotsOfCan(buildSlots(plan, cans), scan.currentCan);
+});
+
+const slotSummary = computed(() => summarizeSlots(currentSlots.value));
+
+function selectSlot(slot: Slot): void {
+  selectedSlot.value = selectedSlot.value?.index === slot.index ? null : slot;
+  replaceCode.value = '';
+  replaceError.value = '';
+}
+
+async function deleteSelectedSlot(): Promise<void> {
+  const slot = selectedSlot.value;
+  if (!slot?.code) return;
+  const ok = await scan.removeSlot(batchId.value, slot.code);
+  if (ok) selectedSlot.value = null;
+}
+
+async function replaceSelectedSlot(): Promise<void> {
+  const slot = selectedSlot.value;
+  const value = replaceCode.value.trim();
+  if (!slot?.code || !value) return;
+  replaceError.value = '';
+  if (classifyCode(value) !== 1) {
+    replaceError.value = '粒子槽位只接受粒子码（8206233 开头）。';
+    return;
+  }
+  const ok = await scan.replaceSlot(batchId.value, slot.code, value);
+  if (ok) {
+    selectedSlot.value = null;
+    replaceCode.value = '';
+  }
+}
 
 function enableAudio(): void {
   audioReady.value = unlockAudio();
@@ -237,6 +292,31 @@ onBeforeUnmount(() => {
           <p v-if="scan.missingParticles" class="scan__hint">
             尚有 <strong class="code-text">{{ scan.missingParticles }}</strong> 个槽位未完成
           </p>
+
+          <div class="scan__history">
+            <AppButton
+              variant="secondary"
+              :disabled="!scan.history.canUndo || scan.busy"
+              :title="scan.history.undoLabel || '没有可撤销的操作'"
+              @click="scan.undo(batchId)"
+            >
+              <template #icon><Undo2 :size="16" aria-hidden="true" /></template>
+              撤销
+            </AppButton>
+            <AppButton
+              variant="secondary"
+              :disabled="!scan.history.canRedo || scan.busy"
+              :title="scan.history.redoLabel || '没有可重做的操作'"
+              @click="scan.redo(batchId)"
+            >
+              <template #icon><Redo2 :size="16" aria-hidden="true" /></template>
+              重做
+            </AppButton>
+          </div>
+          <p class="scan__hint">
+            可撤销 {{ scan.history.canUndo }} 步 / 可重做 {{ scan.history.canRedo }} 步（上限
+            {{ scan.history.maxSteps }}）
+          </p>
         </section>
 
         <!-- 中：取景与输入 -->
@@ -289,6 +369,58 @@ onBeforeUnmount(() => {
 
         <!-- 右：罐进度一览与动作 -->
         <section class="scan__panel">
+          <h3>罐 {{ scan.currentCan }} 的槽位</h3>
+          <p class="scan__hint">
+            已扫 {{ slotSummary.scanned }} / {{ slotSummary.total }}
+            <template v-if="slotSummary.missing">· 缺漏 {{ slotSummary.missing }}</template>
+            <template v-if="slotSummary.conflict">· 异常 {{ slotSummary.conflict }}</template>
+          </p>
+
+          <ul class="scan__slots" role="list">
+            <li v-for="slot in currentSlots" :key="slot.index">
+              <button
+                type="button"
+                class="scan__slot"
+                :class="[`is-${slot.status}`, { 'is-selected': selectedSlot?.index === slot.index }]"
+                :aria-label="`槽位 ${slot.index}，${slot.status === 'scanned' ? '已扫描' : slot.status === 'empty' ? '待扫描' : '异常'}`"
+                @click="selectSlot(slot)"
+              >
+                <span class="code-text">{{ String(slot.index).padStart(3, '0') }}</span>
+                <CheckCircle2 v-if="slot.status === 'scanned'" :size="12" aria-hidden="true" />
+                <TriangleAlert v-else-if="slot.status === 'conflict'" :size="12" aria-hidden="true" />
+                <span v-else class="scan__slot-empty" aria-hidden="true">○</span>
+              </button>
+            </li>
+          </ul>
+
+          <div v-if="selectedSlot" class="scan__slot-detail">
+            <p class="scan__slot-title">
+              粒子槽位 {{ selectedSlot.index }}
+              <span v-if="selectedSlot.code" class="code-text">{{ selectedSlot.code }}</span>
+              <span v-else>（空槽）</span>
+            </p>
+            <template v-if="selectedSlot.code">
+              <AppInput
+                v-model="replaceCode"
+                label="替换为新条码"
+                placeholder="扫描或输入新的粒子码"
+                monospace
+                :error="replaceError"
+              />
+              <div class="scan__actions">
+                <AppButton variant="secondary" :loading="scan.busy" @click="replaceSelectedSlot">
+                  <template #icon><RefreshCw :size="16" aria-hidden="true" /></template>
+                  替换
+                </AppButton>
+                <AppButton variant="danger" :loading="scan.busy" @click="deleteSelectedSlot">
+                  <template #icon><Trash2 :size="16" aria-hidden="true" /></template>
+                  删除
+                </AppButton>
+              </div>
+            </template>
+            <p v-else class="scan__hint">空槽无需操作，继续扫描即可填入。</p>
+          </div>
+
           <h3>各罐进度</h3>
           <ul class="scan__cans">
             <li
@@ -563,6 +695,82 @@ onBeforeUnmount(() => {
 .scan__hint {
   font-size: var(--text-sm);
   color: var(--color-text-muted);
+}
+
+.scan__history {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.scan__slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+  gap: var(--space-1);
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.scan__slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  width: 100%;
+  min-height: 26px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+/* 状态三重表达：颜色 + 图形 + 序号，颜色不是唯一线索 */
+.scan__slot.is-scanned {
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border-color: var(--color-success-border);
+}
+
+.scan__slot.is-empty {
+  color: var(--color-text-subtle);
+}
+
+.scan__slot.is-conflict {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
+}
+
+.scan__slot.is-selected {
+  font-weight: var(--weight-semibold);
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.scan__slot-empty {
+  color: var(--color-text-subtle);
+}
+
+.scan__slot-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.scan__slot-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 
 .scan__probe {

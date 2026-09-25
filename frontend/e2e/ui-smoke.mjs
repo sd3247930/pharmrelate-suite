@@ -450,6 +450,83 @@ async function main() {
       (item) => !item.includes('Failed to load resource'),
     );
     check(finalErrors.length === 0, '扫码流程无未捕获异常', finalErrors.slice(0, 2).join(' | '));
+
+    // ------------------------------------------------ 槽位编辑与撤销/重做（3.4）
+    const slots = page.locator('.scan__slot');
+    check((await slots.count()) === 2, '本罐槽位数来自计划（2 个）');
+
+    // 删除第 1 个槽位
+    await slots.first().click();
+    await page.getByRole('button', { name: '删除' }).click();
+    await page.waitForFunction(
+      () => document.querySelector('.scan__facts')?.textContent?.includes('1 / 2'),
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, '删除槽位后本罐进度变为 1 / 2');
+    const slotPanel = await page.locator('.scan__panel').last().innerText();
+    check(slotPanel.includes('缺漏'), '缺漏槽位在槽位面板上可见');
+
+    // 撤销 → 恢复
+    await page.getByRole('button', { name: '撤销' }).click();
+    await page.waitForFunction(
+      () => document.querySelector('.scan__facts')?.textContent?.includes('2 / 2'),
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, '撤销后进度恢复为 2 / 2');
+
+    // 重做 → 再次删除
+    await page.getByRole('button', { name: '重做' }).click();
+    await page.waitForFunction(
+      () => document.querySelector('.scan__facts')?.textContent?.includes('1 / 2'),
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, '重做后进度回到 1 / 2');
+
+    // 替换：必须选"已扫描"的槽位，空槽没有替换入口
+    const scannedSlot = page.locator('.scan__slot.is-scanned').first();
+    check((await scannedSlot.count()) === 1, '删除后只剩 1 个已扫描槽位');
+    await scannedSlot.click();
+    const newCode = '82062339000000001005';
+    await page.getByLabel('替换为新条码').fill(newCode);
+    await page.getByRole('button', { name: '替换' }).click();
+    await page.waitForFunction(
+      () => !document.querySelector('.scan__slot-detail'),
+      undefined,
+      { timeout: 15000 },
+    );
+    const afterReplace = await (
+      await fetch(`${apiOrigin}/api/batches/${scanBatch.id}`)
+    ).json();
+    check(
+      afterReplace.data.box.cans[0].particles.includes(newCode),
+      '槽位条码已替换为新码',
+      JSON.stringify(afterReplace.data.box.cans[0].particles),
+    );
+
+    const slotAudit = await (
+      await fetch(`${apiOrigin}/api/audit?batchId=${scanBatch.id}`)
+    ).json();
+    const slotActions = new Set(slotAudit.items.map((item) => item.action));
+    check(
+      slotActions.has('delete_particle') &&
+        slotActions.has('replace_particle') &&
+        slotActions.has('undo') &&
+        slotActions.has('redo'),
+      '删除 / 替换 / 撤销 / 重做全部落审计日志',
+    );
+
+    const historyState = await (
+      await fetch(`${apiOrigin}/api/batches/${scanBatch.id}/history`)
+    ).json();
+    // 删除 → 撤销 → 重做 → 替换：重做分支被丢弃后累计 2 步可撤销
+    check(
+      historyState.canUndo === 2 && historyState.canRedo === 0 && historyState.maxSteps === 50,
+      '撤销栈深度上限 50，游标语义正确（撤销后重做、新操作截断重做分支）',
+      JSON.stringify(historyState),
+    );
   } catch (error) {
     // 失败时把"现场"打出来：页面可见文本 + 浏览器控制台报错。
     // 没有这层，超时只能看到一句 waitForFunction，排查全靠猜。

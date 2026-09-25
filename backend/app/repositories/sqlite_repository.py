@@ -468,6 +468,261 @@ class SqliteBatchRepository:
             )
         return self.get(batch_id)
 
+    # ------------------------------------------------------------------
+    # 槽位状态读写（阶段 3.4）
+    #
+    # 所有编辑（删除 / 替换 / 清空 / 重拍罐号）都归结为"恢复某一罐的状态"：
+    # 给出该罐的罐号与粒子列表（有序），一次性把这一罐写回目标状态。
+    # 这样编辑、撤销、重做共用同一个原语，不必各写一套。
+    #
+    # 关键约束：导出顺序必须始终是 箱 → 罐1 → 罐1粒子 → 罐2 → …。
+    # 删除再插入会让新行拿到更大的 seq，从而打乱罐之间的相对顺序，
+    # 因此结构性改动之后统一重排 seq（renumber）。
+    # ------------------------------------------------------------------
+
+    def _can_rows(self, connection: sqlite3.Connection, batch_id: str) -> list[sqlite3.Row]:
+        """按导出顺序返回罐行。罐序号 = 这里的下标 + 1。
+
+        用序号而不是罐号来定位：重拍罐号会改掉罐号，
+        靠罐号定位会让撤销时找不到目标。
+        """
+
+        return connection.execute(
+            "SELECT id, cur_code FROM code WHERE batch_id = ? AND pack_layer = 2 "
+            "AND deleted = 0 ORDER BY seq ASC",
+            (batch_id,),
+        ).fetchall()
+
+    def can_state(self, batch_id: str, can_index: int) -> dict[str, object] | None:
+        with self._db.read() as connection:
+            cans = self._can_rows(connection, batch_id)
+            if not 1 <= can_index <= len(cans):
+                return None
+            can_code = cans[can_index - 1]["cur_code"]
+            rows = connection.execute(
+                "SELECT cur_code FROM code WHERE batch_id = ? AND parent_code = ? "
+                "AND pack_layer = 1 AND deleted = 0 ORDER BY seq ASC",
+                (batch_id, can_code),
+            ).fetchall()
+        return {
+            "canIndex": can_index,
+            "canCode": can_code,
+            "particles": [row["cur_code"] for row in rows],
+        }
+
+    def box_state(self, batch_id: str) -> dict[str, object] | None:
+        with self._db.read() as connection:
+            box = connection.execute(
+                "SELECT cur_code FROM code WHERE batch_id = ? AND pack_layer = 3 AND deleted = 0",
+                (batch_id,),
+            ).fetchone()
+            if box is None:
+                return None
+            cans = connection.execute(
+                "SELECT cur_code FROM code WHERE batch_id = ? AND pack_layer = 2 AND deleted = 0 "
+                "ORDER BY seq ASC",
+                (batch_id,),
+            ).fetchall()
+            states = []
+            for can in cans:
+                rows = connection.execute(
+                    "SELECT cur_code FROM code WHERE batch_id = ? AND parent_code = ? "
+                    "AND pack_layer = 1 AND deleted = 0 ORDER BY seq ASC",
+                    (batch_id, can["cur_code"]),
+                ).fetchall()
+                states.append(
+                    {"canCode": can["cur_code"], "particles": [row["cur_code"] for row in rows]}
+                )
+        return {"boxCode": box["cur_code"], "cans": states}
+
+    def _renumber(self, connection: sqlite3.Connection, batch_id: str) -> None:
+        """按规范顺序重排 seq：箱 → 各罐（保持现有罐间顺序）→ 该罐粒子（保持现有顺序）。
+
+        按规范顺序逐行更新，因此每一步父的 seq 都已经更新完毕，
+        D-010 的 `parent.seq < child.seq` 触发器不会误报。
+        """
+
+        box = connection.execute(
+            "SELECT id, seq FROM code WHERE batch_id = ? AND pack_layer = 3 AND deleted = 0",
+            (batch_id,),
+        ).fetchone()
+        if box is None:
+            return
+
+        cans = connection.execute(
+            "SELECT id, cur_code, seq FROM code WHERE batch_id = ? AND pack_layer = 2 "
+            "AND deleted = 0 ORDER BY seq ASC",
+            (batch_id,),
+        ).fetchall()
+
+        updates: list[tuple[int, str]] = []
+        next_seq = 0
+
+        if (box["seq"] or 0) != next_seq:
+            updates.append((next_seq, box["id"]))
+        next_seq += 1
+
+        for can in cans:
+            if (can["seq"] or 0) != next_seq:
+                updates.append((next_seq, can["id"]))
+            next_seq += 1
+            particles = connection.execute(
+                "SELECT id, seq FROM code WHERE batch_id = ? AND parent_code = ? "
+                "AND pack_layer = 1 AND deleted = 0 ORDER BY seq ASC",
+                (batch_id, can["cur_code"]),
+            ).fetchall()
+            for particle in particles:
+                if (particle["seq"] or 0) != next_seq:
+                    updates.append((next_seq, particle["id"]))
+                next_seq += 1
+
+        if updates:
+            connection.executemany("UPDATE code SET seq = ? WHERE id = ?", updates)
+
+    def apply_can_state(
+        self,
+        batch_id: str,
+        can_index: int,
+        *,
+        new_can_code: str,
+        particles: list[str] | None = None,
+    ) -> BatchRecord | None:
+        """把某一罐写回目标状态（罐号可改，粒子列表整列表替换）。"""
+
+        timestamp = _now()
+
+        with self._db.transaction() as connection:
+            cans = self._can_rows(connection, batch_id)
+            if not 1 <= can_index <= len(cans):
+                return None
+            can = cans[can_index - 1]
+            can_code = can["cur_code"]
+
+            if new_can_code != can_code:
+                connection.execute(
+                    "UPDATE code SET cur_code = ?, updated_at = ? WHERE id = ?",
+                    (new_can_code, timestamp, can["id"]),
+                )
+                connection.execute(
+                    "UPDATE code SET parent_code = ?, updated_at = ? "
+                    "WHERE batch_id = ? AND parent_code = ? AND pack_layer = 1",
+                    (new_can_code, timestamp, batch_id, can_code),
+                )
+                can_code = new_can_code
+
+            if particles is not None:
+                connection.execute(
+                    "DELETE FROM code WHERE batch_id = ? AND parent_code = ? AND pack_layer = 1",
+                    (batch_id, can_code),
+                )
+                if particles:
+                    max_seq = connection.execute(
+                        "SELECT COALESCE(MAX(seq), -1) AS value FROM code WHERE batch_id = ?",
+                        (batch_id,),
+                    ).fetchone()["value"]
+                    connection.executemany(
+                        """
+                        INSERT INTO code
+                            (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                             planned_particle_count, created_at, updated_at)
+                        VALUES (?, ?, ?, 1, ?, ?, NULL, ?, ?)
+                        """,
+                        [
+                            (
+                                str(uuid.uuid4()),
+                                batch_id,
+                                code,
+                                can_code,
+                                max_seq + 1 + offset,
+                                timestamp,
+                                timestamp,
+                            )
+                            for offset, code in enumerate(particles)
+                        ],
+                    )
+
+            self._renumber(connection, batch_id)
+            connection.execute(
+                "UPDATE batch SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (timestamp, batch_id),
+            )
+        return self.get(batch_id)
+
+    def apply_box_state(
+        self, batch_id: str, box_code: str, cans: list[dict[str, object]]
+    ) -> BatchRecord | None:
+        """整箱写回（重拍箱号 / 撤销箱级操作）。"""
+
+        timestamp = _now()
+        with self._db.transaction() as connection:
+            exists = connection.execute(
+                "SELECT id FROM batch WHERE id = ? AND deleted = 0", (batch_id,)
+            ).fetchone()
+            if exists is None:
+                return None
+
+            connection.execute("DELETE FROM code WHERE batch_id = ?", (batch_id,))
+
+            if box_code:
+                connection.execute(
+                    """
+                    INSERT INTO code
+                        (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                         planned_particle_count, created_at, updated_at)
+                    VALUES (?, ?, ?, 3, NULL, 0, NULL, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), batch_id, box_code, timestamp, timestamp),
+                )
+                seq = 1
+                for can in cans:
+                    can_code = str(can.get("canCode") or "")
+                    if not can_code:
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO code
+                            (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                             planned_particle_count, created_at, updated_at)
+                        VALUES (?, ?, ?, 2, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            batch_id,
+                            can_code,
+                            box_code,
+                            seq,
+                            int(can.get("plannedParticleCount") or 0),
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                    seq += 1
+                    for particle in list(can.get("particles") or []):
+                        connection.execute(
+                            """
+                            INSERT INTO code
+                                (id, batch_id, cur_code, pack_layer, parent_code, seq,
+                                 planned_particle_count, created_at, updated_at)
+                            VALUES (?, ?, ?, 1, ?, ?, NULL, ?, ?)
+                            """,
+                            (
+                                str(uuid.uuid4()),
+                                batch_id,
+                                str(particle),
+                                can_code,
+                                seq,
+                                timestamp,
+                                timestamp,
+                            ),
+                        )
+                        seq += 1
+
+            connection.execute(
+                "UPDATE batch SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (timestamp, batch_id),
+            )
+        return self.get(batch_id)
+
     def set_early_end(self, batch_id: str, early_end: EarlyEnd | None) -> BatchRecord | None:
         timestamp = _now()
         with self._db.transaction() as connection:

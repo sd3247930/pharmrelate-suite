@@ -242,8 +242,8 @@ def main() -> int:
         status, storage = get_json(f"{base}/api/system/storage")
         in_temp = isinstance(storage, dict) and data_dir.name in str(storage.get("databasePath", ""))
         check(
-            status == 200 and storage.get("schemaVersion") == "4" and in_temp,
-            "本地库落在用户数据目录且 schema 版本为 4",
+            status == 200 and storage.get("schemaVersion") == "5" and in_temp,
+            "本地库落在用户数据目录且 schema 版本为 5",
         )
 
         batch_id = created.get("id")
@@ -397,6 +397,27 @@ def main() -> int:
             status == 200 and conflict_audit.get("total", -1) >= 0,
             "冲突审计查询可用",
         )
+
+        # ---- 识别性能：严格按 V1.1 13.3 的 300ms 指标单独测量 ----
+        # 放在冒烟而不是单元测试里：这里没有 190 项并发测试抢 CPU，
+        # 测出来的才是识别本身的耗时。
+        from app.services.recognition import decode_file as recognize_file
+        from pathlib import Path as _Path
+
+        photo = _Path(__file__).resolve().parents[2] / "private" / "条形码.jpg"
+        if photo.is_file():
+            recognize_file(photo, expected_min=6)  # 预热
+            samples = sorted(
+                recognize_file(photo, expected_min=6).elapsed_ms for _ in range(3)
+            )
+            median = samples[len(samples) // 2]
+            check(
+                median < 300.0,
+                "真实照片单帧识别耗时 ≤ 300ms（V1.1 13.3）",
+                f"中位数 {median:.1f} ms",
+            )
+        else:
+            check(False, "真实照片单帧识别耗时", f"找不到 {photo}")
 
     finally:
         process.terminate()

@@ -84,6 +84,8 @@ class ScanSnapshot:
     can_plan: list[int] = field(default_factory=list)
     can_codes: list[str] = field(default_factory=list)
     can_scanned: list[int] = field(default_factory=list)
+    can_particles: list[list[str]] = field(default_factory=list)
+    """每罐已扫到的粒子码（按采集顺序）。槽位网格直接用它渲染。"""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -106,6 +108,7 @@ class ScanSnapshot:
             "canPlan": self.can_plan,
             "canCodes": self.can_codes,
             "canScanned": self.can_scanned,
+            "canParticles": self.can_particles,
         }
 
 
@@ -199,6 +202,7 @@ class ScanService:
 
         can_codes = [can.code for can in batch.box.cans]
         can_scanned = [len(can.particles) for can in batch.box.cans]
+        can_particles = [list(can.particles) for can in batch.box.cans]
         current_planned = plan[index - 1] if 1 <= index <= len(plan) else 0
         current_can = next((item for item in batch.box.cans if item.index == index), None)
         current_scanned = len(current_can.particles) if current_can else 0
@@ -223,6 +227,7 @@ class ScanService:
             can_plan=list(plan),
             can_codes=can_codes,
             can_scanned=can_scanned,
+            can_particles=can_particles,
         )
 
     # ------------------------------------------------------------------ 拦截

@@ -223,6 +223,35 @@ CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_log (entity, entity_id, time
 CREATE INDEX IF NOT EXISTS ix_audit_timestamp ON audit_log (timestamp DESC);
 
 -- ---------------------------------------------------------------------------
+-- 槽位编辑操作栈（阶段 3.4 撤销/重做）
+--
+-- 设计：每一步记录"受影响范围的完整前后状态"，撤销就是恢复前状态、重做就是恢复后状态。
+-- 为什么不记增量：条码的编辑语义包含顺序（导出必须保持采集原序），
+-- 增量日志要正确重建顺序，复杂度和出错面都远高于直接存前后状态；
+-- 一罐最多 2500 粒 ≈ 52KB，50 步 ≈ 2.6MB，SQLite 完全承受得起。
+--
+-- 栈用游标表示：cursor 之前（含）的操作处于"已应用"，之后处于"已撤销"。
+-- 撤销/重做严格 LIFO，所以已应用的必然是前缀 —— 这个不变量让实现非常干净。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS scan_op (
+    op_seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id    TEXT NOT NULL REFERENCES batch (id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    scope       TEXT NOT NULL CHECK (scope IN ('can', 'box')),
+    label       TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_scan_op_batch ON scan_op (batch_id, op_seq);
+
+CREATE TABLE IF NOT EXISTS scan_cursor (
+    batch_id TEXT PRIMARY KEY REFERENCES batch (id) ON DELETE CASCADE,
+    cursor   INTEGER NOT NULL DEFAULT 0
+);
+
+-- ---------------------------------------------------------------------------
 -- 元数据（schema 版本，供后续迁移使用）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS meta (

@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 
 try:
-    from tests.support import BACKEND_DIR, TempDatabaseTestCase
+    from tests.support import BACKEND_DIR, TempDatabaseTestCase, resolve_photo
 except ImportError:
-    from support import BACKEND_DIR, TempDatabaseTestCase
+    from support import BACKEND_DIR, TempDatabaseTestCase, resolve_photo
 
 from fastapi.testclient import TestClient
 
@@ -27,7 +27,7 @@ from app.services.frame_source import (
 )
 from app.services.recognition import DEFAULT_MAX_WIDTH
 
-PHOTO = BACKEND_DIR.parent / "private" / "微信图片_20260920122532_2236_7.jpg"
+PHOTO = resolve_photo()
 
 BOX = "80217619000000001003"
 CAN1 = "80217629000000001005"

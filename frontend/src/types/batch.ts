@@ -222,6 +222,7 @@ export interface ScanSnapshot {
   canPlan: number[];
   canCodes: string[];
   canScanned: number[];
+  canParticles: string[][];
 }
 
 export interface CameraStatus {
@@ -235,6 +236,22 @@ export interface CameraStatus {
   startedAt: string;
   lastFrameAt: string;
   metadata: Record<string, unknown>;
+}
+
+export interface EditHistory {
+  canUndo: number;
+  canRedo: number;
+  undoLabel: string;
+  redoLabel: string;
+  maxSteps: number;
+}
+
+/** 槽位编辑类接口的统一返回：数据 + 撤销栈状态。 */
+export interface SlotEditResponse {
+  data: BatchPayload & { earlyEnd?: EarlyEnd };
+  history: EditHistory;
+  canCount: number;
+  actualParticleTotal: number;
 }
 
 /** 条码层级判定，等价于后端的 classify_code。 */

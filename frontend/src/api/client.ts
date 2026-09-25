@@ -16,6 +16,7 @@ import type {
   EarlyEnd,
   HealthResponse,
   ScanSnapshot,
+  SlotEditResponse,
   TransitionsResponse,
   XmlPreviewResponse,
 } from '../types/batch';
@@ -235,6 +236,42 @@ export const api = {
 
   scanReset: (batchId: string) =>
     request<ScanSnapshot>(`/scan/${batchId}/reset`, { method: 'POST' }),
+
+  // ------------------------------------------------------------ 槽位编辑
+  slotDelete: (batchId: string, code: string) =>
+    request<SlotEditResponse>(`/batches/${batchId}/slots/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+
+  slotReplace: (batchId: string, code: string, newCode: string) =>
+    request<SlotEditResponse>(`/batches/${batchId}/slots/replace`, {
+      method: 'POST',
+      body: JSON.stringify({ code, newCode }),
+    }),
+
+  clearCan: (batchId: string, canIndex: number) =>
+    request<SlotEditResponse>(`/batches/${batchId}/cans/${canIndex}/clear`, {
+      method: 'POST',
+    }),
+
+  rescanCan: (batchId: string, canIndex: number, newCanCode: string) =>
+    request<SlotEditResponse>(`/batches/${batchId}/cans/${canIndex}/rescan`, {
+      method: 'POST',
+      body: JSON.stringify({ newCanCode }),
+    }),
+
+  rescanBox: (batchId: string, newBoxCode = '') =>
+    request<SlotEditResponse>(`/batches/${batchId}/box/rescan`, {
+      method: 'POST',
+      body: JSON.stringify({ newBoxCode }),
+    }),
+
+  scanUndo: (batchId: string) =>
+    request<SlotEditResponse>(`/batches/${batchId}/undo`, { method: 'POST' }),
+
+  scanRedo: (batchId: string) =>
+    request<SlotEditResponse>(`/batches/${batchId}/redo`, { method: 'POST' }),
 
   // -------------------------------------------------------------- 摄像头
   cameraStatus: () => request<CameraStatus>('/camera/status'),

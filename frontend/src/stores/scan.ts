@@ -10,7 +10,7 @@ import { computed, ref } from 'vue';
 
 import { ApiError, api } from '../api/client';
 import { playAlarm, type AlarmTone } from '../services/alarm';
-import type { ScanEvent, ScanSnapshot } from '../types/batch';
+import type { EditHistory, ScanEvent, ScanSnapshot, SlotEditResponse } from '../types/batch';
 
 /** 事件码 → 声音。成功音轻、异常音重，与 V1.1 56 章的音型约定一致。 */
 function toneFor(event: ScanEvent | null): AlarmTone | null {
@@ -40,6 +40,13 @@ export const useScanStore = defineStore('scan', () => {
   const cameraError = ref('');
   const cameraHint = ref('');
   const frameTick = ref(0);
+  const history = ref<EditHistory>({
+    canUndo: 0,
+    canRedo: 0,
+    undoLabel: '',
+    redoLabel: '',
+    maxSteps: 50,
+  });
 
   const status = computed(() => snapshot.value?.status ?? 'idle');
   const statusLabel = computed(() => snapshot.value?.statusLabel ?? '待开始');
@@ -111,6 +118,57 @@ export const useScanStore = defineStore('scan', () => {
     return run(() => api.scanSession(batchId));
   }
 
+  /**
+   * 槽位编辑统一收口。
+
+   * 编辑会改动批次数据，因此每次编辑后都重新拉会话快照，
+   * 保证进度、槽位、状态全部来自后端而不是本地推算。
+   */
+  async function edit(
+    batchId: string,
+    action: () => Promise<SlotEditResponse>,
+  ): Promise<boolean> {
+    busy.value = true;
+    errorMessage.value = '';
+    try {
+      const result = await action();
+      history.value = result.history;
+      await run(() => api.scanSession(batchId));
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError) {
+        errorMessage.value = error.message;
+        blocked.value = {
+          code: String(error.detail.reason ?? error.code),
+          label: '编辑被拒绝',
+          message: error.message,
+          blocking: true,
+          needsAlarm: false,
+          detail: error.detail,
+        };
+        playAlarm('scan-warning');
+      } else {
+        errorMessage.value = error instanceof Error ? error.message : String(error);
+      }
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  const removeSlot = (batchId: string, code: string) =>
+    edit(batchId, () => api.slotDelete(batchId, code));
+
+  const replaceSlot = (batchId: string, code: string, newCode: string) =>
+    edit(batchId, () => api.slotReplace(batchId, code, newCode));
+
+  const clearCan = (batchId: string, canIndex: number) =>
+    edit(batchId, () => api.clearCan(batchId, canIndex));
+
+  const undo = (batchId: string) => edit(batchId, () => api.scanUndo(batchId));
+
+  const redo = (batchId: string) => edit(batchId, () => api.scanRedo(batchId));
+
   /** 手动输入 / 条码枪 HID / 拍照识别，最终都汇到这一个入口。 */
   async function submitCodes(
     batchId: string,
@@ -173,6 +231,13 @@ export const useScanStore = defineStore('scan', () => {
     cameraRunning.value = false;
     cameraError.value = '';
     cameraHint.value = '';
+    history.value = {
+      canUndo: 0,
+      canRedo: 0,
+      undoLabel: '',
+      redoLabel: '',
+      maxSteps: 50,
+    };
   }
 
   return {
@@ -184,6 +249,7 @@ export const useScanStore = defineStore('scan', () => {
     cameraError,
     cameraHint,
     frameTick,
+    history,
     status,
     statusLabel,
     currentCan,
@@ -196,6 +262,11 @@ export const useScanStore = defineStore('scan', () => {
     scanMode,
     load,
     submitCodes,
+    removeSlot,
+    replaceSlot,
+    clearCan,
+    undo,
+    redo,
     confirm,
     rescan,
     nextCan,

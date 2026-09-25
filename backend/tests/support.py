@@ -25,6 +25,31 @@ from app.main import create_app  # noqa: E402
 from app.services import golden  # noqa: E402
 from app.services.xml_parser import parse_bytes  # noqa: E402
 
+PRIVATE_DIR = BACKEND_DIR.parent / "private"
+
+PHOTO_CANDIDATES: tuple[str, ...] = (
+    "条形码.jpg",
+    "微信图片_20260920122532_2236_7.jpg",
+)
+"""现场实拍的标签照片。允许改名，因此按候选名依次找。
+
+**找不到时会直接失败，而不是跳过。** 这张照片是仓库内的固定夹具，
+改名后如果静默跳过，19 项识别与摄像头测试会悄悄停止运行，
+覆盖率凭空消失却没有任何提示 —— 测试跳过必须是响亮的。
+"""
+
+
+def resolve_photo() -> Path:
+    for name in PHOTO_CANDIDATES:
+        candidate = PRIVATE_DIR / name
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        "找不到实拍标签照片。已尝试："
+        + "、".join(PHOTO_CANDIDATES)
+        + f"。照片应放在 {PRIVATE_DIR}，或将新文件名加入 PHOTO_CANDIDATES。"
+    )
+
 
 class TempDatabaseTestCase(unittest.TestCase):
     """为每个用例准备一个临时 SQLite 库，并在结束后清理。"""

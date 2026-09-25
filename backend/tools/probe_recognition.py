@@ -20,7 +20,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-DEFAULT_IMAGE = BACKEND_DIR.parent / "private" / "微信图片_20260920122532_2236_7.jpg"
+DEFAULT_IMAGE = BACKEND_DIR.parent / "private" / "条形码.jpg"
 
 
 def use_utf8_stdout() -> None:
