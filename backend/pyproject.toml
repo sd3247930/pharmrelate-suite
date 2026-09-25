@@ -26,6 +26,9 @@ dev = [
     "pytest>=8.0",
     # starlette TestClient 依赖 httpx；不显式声明会在重装环境时缺包
     "httpx>=0.27",
+    # 仅测试与自测工具需要：生成自签证书以验证 wss:// 通道。
+    # 产品运行时不依赖它 —— 生产证书由部署方自己生成与轮换。
+    "cryptography>=42.0",
 ]
 
 [tool.pytest.ini_options]

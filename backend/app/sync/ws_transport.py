@@ -350,15 +350,21 @@ class WebSocketTransport:
         import websockets
 
         assert self._loop is not None
-        self._connection = self._loop.run_until_complete(
-            websockets.connect(
-                self.url,
-                ssl=self._ssl_context,
-                open_timeout=self._connect_timeout,
-                ping_interval=None,
-                max_size=8 * 1024 * 1024,
+        try:
+            self._connection = self._loop.run_until_complete(
+                websockets.connect(
+                    self.url,
+                    ssl=self._ssl_context,
+                    open_timeout=self._connect_timeout,
+                    ping_interval=None,
+                    max_size=8 * 1024 * 1024,
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001
+            # 连接失败一律转成可重试的 TransportError。
+            # 不包装的话调用方会拿到裸的 OSError/ConnectionRefusedError，
+            # 重试逻辑就得同时处理两种异常类型 —— 那是通道封装该干的活。
+            raise TransportError(f"无法连接 {self.url}：{exc}", retryable=True) from exc
 
     def _round_trip(self, envelope: Envelope) -> Envelope:
         assert self._loop is not None and self._connection is not None
