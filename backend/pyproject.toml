@@ -1,0 +1,31 @@
+[project]
+name = "pharmrelate-multi-backend"
+version = "0.1.0"
+description = "籽关通 (PharmRelate Multi) 本地服务：条码识别、关联数据管理、XML/HTML 导出"
+requires-python = ">=3.11"
+
+# 一期（Windows 单机闭环）
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# 条码识别层：阶段 3 才启用。
+# 已在本机验证 Python 3.14 存在可用 wheel：
+#   opencv-python-headless 5.0.0.93 (abi3) / pyzbar 0.1.9 (win_amd64) / zxing-cpp 3.1.1 (abi3)
+scan = [
+    "opencv-python-headless>=4.9",
+    "zxing-cpp>=2.2",
+    "pyzbar>=0.1.9",
+    "numpy>=1.26",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

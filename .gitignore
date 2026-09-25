@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / 前端
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Tauri / Rust
+src-tauri/target/
+target/
+
+# 构建产物
+build/
+release/
+*.exe
+*.msi
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 密钥与本地配置
+.env
+.env.local
+*.log
+
+# 本地运行产物
+backend/var/
+backend/exports/
+
+# 注意：以下路径必须入库，禁止加入忽略规则
+#   backend/tests/golden/     字节级黄金基准
+#   backend/tests/fixtures/   独立手写锚点

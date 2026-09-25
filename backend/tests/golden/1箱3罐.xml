@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?><Document xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="关联关系XML Schema-3.0.xsd" License="1001123">
+<Events Version="3.0">
+<Event Name="RelationCreate">
+<Relation productCode="9999999" subTypeNo="9500000001" cascade="1:5:2500" packageSpec="粒1粒" comment="0">
+<Batch batchNo="20260901" madeDate="2026-09-23" validateDate="2026-10-23" workshop="一号车间" lineName="一号生产线" lineManager="操作员甲">
+<Code curCode="80217619000000001003" packLayer="3" flag="2"/>
+<Code curCode="80217629000000001005" packLayer="2" parentCode="80217619000000001003" flag="2"/>
+<Code curCode="82062339000000001004" packLayer="1" parentCode="80217629000000001005" flag="2"/>
+<Code curCode="80217629000000001004" packLayer="2" parentCode="80217619000000001003" flag="2"/>
+<Code curCode="82062339000000001001" packLayer="1" parentCode="80217629000000001004" flag="2"/>
+<Code curCode="80217629000000001006" packLayer="2" parentCode="80217619000000001003" flag="2"/>
+<Code curCode="82062339000000001003" packLayer="1" parentCode="80217629000000001006" flag="2"/>
+<Code curCode="82062339000000001002" packLayer="1" parentCode="80217629000000001006" flag="2"/>
+</Batch>
+</Relation>
+</Event>
+</Events>
+</Document>

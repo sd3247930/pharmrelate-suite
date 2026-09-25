@@ -1,0 +1,25 @@
+# 黄金基准必须保持原始字节，禁止任何换行归一化。
+# 一旦被 git 转成 CRLF，字节级往返测试就会失败。
+backend/tests/golden/*.xml -text
+private/*.XML -text
+private/*.jpg -text
+
+# 源码统一使用 LF
+*.py    text eol=lf
+*.ts    text eol=lf
+*.vue   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# Windows 脚本
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 二进制
+*.png   binary
+*.ico   binary
+*.exe   binary
