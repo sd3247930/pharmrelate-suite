@@ -468,7 +468,26 @@ async function main() {
     const slotPanel = await page.locator('.scan__panel').last().innerText();
     check(slotPanel.includes('缺漏'), '缺漏槽位在槽位面板上可见');
 
-    // 撤销 → 恢复
+    // 快捷键：点一下页面把焦点移出输入框，再按 Ctrl+Z
+    await page.locator('.scan__panel h3').first().click();
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(
+      () => document.querySelector('.scan__facts')?.textContent?.includes('2 / 2'),
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, 'Ctrl+Z 撤销可用（快捷键与按钮等效）');
+
+    // 再按 Ctrl+Shift+Z 重做回删除状态
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForFunction(
+      () => document.querySelector('.scan__facts')?.textContent?.includes('1 / 2'),
+      undefined,
+      { timeout: 15000 },
+    );
+    check(true, 'Ctrl+Shift+Z 重做可用');
+
+    // 撤销 → 恢复（按钮路径，与上面的快捷键等效）
     await page.getByRole('button', { name: '撤销' }).click();
     await page.waitForFunction(
       () => document.querySelector('.scan__facts')?.textContent?.includes('2 / 2'),

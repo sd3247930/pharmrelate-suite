@@ -35,6 +35,7 @@ import {
 } from '../services/alarm';
 import { useBatchStore } from '../stores/batch';
 import { useScanStore } from '../stores/scan';
+import { useHotkeys } from '../composables/useHotkeys';
 import { classifyCode, CODE_LENGTH, LAYER_LABELS } from '../types/batch';
 import type { CanPayload } from '../types/batch';
 import { buildSlots, slotsOfCan, summarizeSlots, type Slot } from '../services/slotGrid';
@@ -222,6 +223,32 @@ onMounted(() => {
   void syncSession();
 });
 
+/**
+ * 快捷键。每个键都有对应的界面按钮 —— 快捷键只是加速，
+ * 不能成为唯一入口，否则新操作员找不到功能。
+ */
+useHotkeys([
+  {
+    combo: 'ctrl+z',
+    handler: () => {
+      if (scan.history.canUndo) void scan.undo(batchId.value);
+    },
+  },
+  {
+    combo: 'ctrl+shift+z',
+    handler: () => {
+      if (scan.history.canRedo) void scan.redo(batchId.value);
+    },
+  },
+  { combo: 'f5', handler: () => void syncSession() },
+  {
+    combo: 'escape',
+    handler: () => {
+      if (selectedSlot.value) selectedSlot.value = null;
+    },
+  },
+]);
+
 onBeforeUnmount(() => {
   if (frameTimer !== undefined) window.clearInterval(frameTimer);
   void scan.stopCamera();
@@ -336,6 +363,9 @@ onBeforeUnmount(() => {
           <p class="scan__hint">
             可撤销 {{ scan.history.canUndo }} 步 / 可重做 {{ scan.history.canRedo }} 步（上限
             {{ scan.history.maxSteps }}）
+          </p>
+          <p class="scan__hint">
+            快捷键：Ctrl+Z 撤销 · Ctrl+Shift+Z 重做 · F5 刷新会话 · Esc 取消选中
           </p>
         </section>
 

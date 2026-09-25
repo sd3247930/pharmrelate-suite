@@ -23,6 +23,8 @@ import AppStatusBadge from '../components/AppStatusBadge.vue';
 import AppXmlViewer from '../components/AppXmlViewer.vue';
 import { ApiError, api, apiBaseUrl } from '../api/client';
 import { useBatchStore } from '../stores/batch';
+import { useHotkeys } from '../composables/useHotkeys';
+import { addOperator, loadOperators, removeOperator } from '../services/operators';
 import type { ExportRecord, Review } from '../types/batch';
 
 /**
@@ -107,6 +109,9 @@ onMounted(() => {
   void loadExports();
 });
 
+/** F5 刷新核对结果。刷新入口在卡片右上角也有按钮，快捷键只是加速。 */
+useHotkeys([{ combo: 'f5', handler: () => void loadReview() }]);
+
 // 流转原因 / 解锁原因
 const reasonDialogOpen = ref(false);
 const pendingTarget = ref('');
@@ -119,7 +124,30 @@ const earlyEndReason = ref('');
 const earlyEndOperator = ref('操作员甲');
 const earlyEndNote = ref('');
 
-const OPERATORS = ['操作员甲', '操作员乙', '操作员丙', '操作员丁'];
+/** 操作员名单改为可配置：现场有第五个人时不必改代码。 */
+const operators = ref<string[]>(loadOperators());
+const manageMessage = ref('');
+const newOperator = ref('');
+const showOperatorManager = ref(false);
+
+function addOperatorName(): void {
+  const value = newOperator.value.trim();
+  if (!value) return;
+  const before = operators.value.length;
+  operators.value = addOperator(operators.value, value);
+  manageMessage.value =
+    operators.value.length > before ? `已添加 ${value}` : `${value} 已在名单中`;
+  newOperator.value = '';
+}
+
+function removeOperatorName(name: string): void {
+  if (operators.value.length <= 1) {
+    manageMessage.value = '至少要保留一个操作员。';
+    return;
+  }
+  operators.value = removeOperator(operators.value, name);
+  manageMessage.value = `已移除 ${name}`;
+}
 
 const pendingTargetLabel = computed(
   () => batch.transitions.find((item) => item.target === pendingTarget.value)?.label ?? '',
@@ -647,9 +675,27 @@ async function submitEarlyEnd(): Promise<void> {
         <label class="preview__select">
           <span>操作人</span>
           <select v-model="earlyEndOperator">
-            <option v-for="name in OPERATORS" :key="name" :value="name">{{ name }}</option>
+            <option v-for="name in operators" :key="name" :value="name">{{ name }}</option>
           </select>
         </label>
+        <div>
+          <AppButton variant="ghost" @click="showOperatorManager = !showOperatorManager">
+            {{ showOperatorManager ? '收起名单管理' : '管理操作员名单' }}
+          </AppButton>
+        </div>
+        <div v-if="showOperatorManager" class="preview__operators">
+          <ul>
+            <li v-for="name in operators" :key="name">
+              <span>{{ name }}</span>
+              <AppButton variant="ghost" @click="removeOperatorName(name)">移除</AppButton>
+            </li>
+          </ul>
+          <div class="preview__operator-add">
+            <AppInput v-model="newOperator" label="新增操作员" placeholder="姓名" />
+            <AppButton variant="secondary" @click="addOperatorName">添加</AppButton>
+          </div>
+          <p v-if="manageMessage" class="preview__hint">{{ manageMessage }}</p>
+        </div>
         <AppInput v-model="earlyEndNote" label="备注" placeholder="补充说明（可留空）" />
         <p class="preview__hint">
           实际罐数与实际粒子数由服务端按库内数据填写，不受界面影响。
