@@ -81,6 +81,9 @@ Invoke-Step -Name 'P0 验收清单自动核对' -WorkingDirectory $backendDir `
 Invoke-Step -Name '20 台并发压测（模拟客户端）' -WorkingDirectory $backendDir `
     -Command @($python, 'tools\loadtest.py', '--quick')
 
+Invoke-Step -Name 'WebSocket 通道本地自测（ws + wss）' -WorkingDirectory $backendDir `
+    -Command @($python, 'tools\ws_selftest.py')
+
 Invoke-Step -Name '前端单元测试（路由 + 条码规则）' -WorkingDirectory $frontendDir `
     -Command @('npm', 'test')
 
