@@ -18,7 +18,18 @@ from .envelope import (
     PROTOCOL_VERSION,
     Envelope,
 )
-from .memory import InMemoryHub, InMemorySyncTransport, SyncDigest
+from .digest import SyncDigest, code_set_hash, digest_of_batch
+from .engine import PushOutcome, SyncEngine, VerifyOutcome
+from .memory import InMemoryHub, InMemorySyncTransport
+from .oplog import (
+    ACTION_CREATE,
+    ACTION_DELETE,
+    ACTION_REPLACE,
+    ACTION_UPDATE,
+    OplogEntry,
+    OplogError,
+    OplogStore,
+)
 from .transport import (
     RejectedOp,
     SendResult,
@@ -40,13 +51,25 @@ __all__ = [
     "KIND_PONG",
     "PROTOCOL_VERSION",
     "Envelope",
+    "OplogEntry",
+    "OplogError",
+    "OplogStore",
+    "PushOutcome",
     "InMemoryHub",
     "InMemorySyncTransport",
     "RejectedOp",
     "SendResult",
     "SyncDigest",
+    "SyncEngine",
     "SyncTransport",
     "TransportCapabilities",
     "TransportError",
     "TransportStatus",
+    "VerifyOutcome",
+    "ACTION_CREATE",
+    "ACTION_DELETE",
+    "ACTION_REPLACE",
+    "ACTION_UPDATE",
+    "code_set_hash",
+    "digest_of_batch",
 ]

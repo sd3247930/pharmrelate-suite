@@ -31,9 +31,111 @@ from app.sync.envelope import KIND_PING, Envelope  # noqa: E402
 from app.sync.pairing import PairingService, fingerprint  # noqa: E402
 from app.sync.transport import TransportError  # noqa: E402
 from app.sync.ws_transport import WebSocketTransport, WsSyncServer, backoff_delay  # noqa: E402
+from app.domain.models import Batch, BoxCode, CanCode  # noqa: E402
+from app.db import Database  # noqa: E402
+from app.sync.engine import SyncEngine  # noqa: E402
+from app.sync.memory import InMemoryHub  # noqa: E402
+from app.sync.oplog import ACTION_CREATE, OplogEntry, OplogStore  # noqa: E402
 
 BATCH = "WSTEST"
 BOX = "80217619000000001003"
+
+OPLOG_BATCH = "WSTEST-OPLOG"
+OPLOG_CAN = "80217629000000001005"
+OPLOG_PARTICLES = ["82062339000000001004", "82062339000000001001"]
+
+
+def oplog_entry(code: str, layer: int, hlc: str) -> OplogEntry:
+    return OplogEntry(
+        op_id=f"{OPLOG_BATCH}:{layer}:{code}",
+        batch_id=OPLOG_BATCH,
+        entity={3: "box", 2: "can", 1: "particle"}[layer],
+        entity_id=code,
+        action=ACTION_CREATE,
+        hlc=hlc,
+        device_id="android-01",
+        user_id="操作员甲",
+        timestamp="2026-09-26T10:00:00+00:00",
+        new_value={"code": code, "packLayer": layer},
+    )
+
+
+def run_oplog_suite(runner: Runner, *, scheme: str, certs_dir: Path | None) -> None:
+    """批次 1 的验收：oplog 增量推送 + 摘要校验走真实 WebSocket。"""
+
+    print(f"\n===== OPLOG over {scheme.upper()} =====")
+
+    ssl_context = None
+    client_context = None
+    if scheme == "wss":
+        assert certs_dir is not None
+        paths = generate_self_signed(certs_dir / f"oplog-{scheme}", extra_hosts=["127.0.0.1"])
+        ssl_context = server_ssl_context(paths.cert, paths.key)
+        client_context = client_ssl_context(paths.cert, check_hostname=False)
+
+    with tempfile.TemporaryDirectory(prefix="pharmrelate-oplog-") as tmp:
+        store = OplogStore(Database(Path(tmp) / "oplog.db"))
+        hub = InMemoryHub()          # 服务端业务逻辑复用假实现
+        pairing = PairingService()
+        server = WsSyncServer(port=0, hub=hub, ssl_context=ssl_context, pairing=pairing)
+        info = server.start()
+        try:
+            fp = fingerprint("oplog-device")
+            token, _ = pairing.issue(fp)
+            transport = WebSocketTransport(
+                info.url, token=token, device_fingerprint=fp, ssl_context=client_context
+            )
+            transport.open(batch_id=OPLOG_BATCH, device_id="android-01")
+
+            store.append(oplog_entry(BOX, 3, "1700000000001-000000-android-01"))
+            store.append(oplog_entry(OPLOG_CAN, 2, "1700000000002-000000-android-01"))
+            for offset, code in enumerate(OPLOG_PARTICLES):
+                store.append(
+                    oplog_entry(code, 1, f"17000000000{offset + 3}-000000-android-01")
+                )
+
+            engine = SyncEngine(store)
+            outcome = engine.push_pending(transport, OPLOG_BATCH)
+            runner.check(
+                outcome.ok and outcome.sent == 4,
+                f"[{scheme}] oplog 增量推送到服务端",
+                f"发出 {outcome.sent} 条，接受 {outcome.accepted} 条",
+            )
+            runner.check(
+                store.pending(OPLOG_BATCH) == [],
+                f"[{scheme}] 推送后队列已清空",
+            )
+
+            batch = Batch(
+                batch_no="20260901",
+                made_date="2026-09-23",
+                validate_date="2026-10-23",
+                box=BoxCode(
+                    code=BOX,
+                    cans=[
+                        CanCode(index=1, code=OPLOG_CAN, particles=list(OPLOG_PARTICLES))
+                    ],
+                ),
+            )
+            verify = engine.verify_digest(transport, batch, batch_key=OPLOG_BATCH)
+            runner.check(
+                verify.matched,
+                f"[{scheme}] 摘要校验一致（本地 == 服务端）",
+                " / ".join(verify.differences) or "四项全对",
+            )
+
+            # 少推一条 → 摘要必须报不一致
+            store.append(oplog_entry("82062339000000001006", 1, "1700000000099-000000-android-01"))
+            mismatch = engine.verify_digest(transport, batch, batch_key=OPLOG_BATCH)
+            runner.check(
+                not mismatch.matched and mismatch.needs_full_pull,
+                f"[{scheme}] 少推一条时摘要报不一致并要求全量拉取",
+                " / ".join(mismatch.differences),
+            )
+
+            transport.close()
+        finally:
+            server.stop()
 
 
 def use_utf8_stdout() -> None:
@@ -171,6 +273,11 @@ def main() -> int:
             runner.skip("wss", "--ws-only")
         else:
             run_suite(runner, scheme="wss", certs_dir=certs_dir)
+
+        # 批次 1 验收：oplog 增量同步 + 摘要校验走真实 WebSocket
+        run_oplog_suite(runner, scheme="ws", certs_dir=None)
+        if not args.ws_only:
+            run_oplog_suite(runner, scheme="wss", certs_dir=certs_dir)
 
     print()
     if runner.failures:

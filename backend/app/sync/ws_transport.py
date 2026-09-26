@@ -203,6 +203,8 @@ class WsSyncServer:
                                 "duplicate": result.duplicate,
                                 "gapDetected": result.gap_detected,
                                 "expectedSeq": result.expected_seq,
+                                # 摘要探测的应答必须带上，否则调用方永远看不到远端摘要
+                                "digest": result.digest,
                             },
                         )
                         await connection.send(json.dumps(ack.to_dict(), ensure_ascii=False))
@@ -431,6 +433,8 @@ class WebSocketTransport:
             if payload.get("gapDetected"):
                 combined.gap_detected = True
                 combined.expected_seq = int(payload.get("expectedSeq") or 0)
+            if payload.get("digest"):
+                combined.digest = dict(payload["digest"])  # type: ignore[arg-type]
         return combined
 
     def reconnect(self, *, sleep: Any = None) -> bool:

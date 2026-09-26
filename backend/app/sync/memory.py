@@ -21,6 +21,7 @@ from .envelope import (
     KIND_OPLOG_ACK,
     Envelope,
 )
+from .digest import SyncDigest, code_set_hash
 from .transport import (
     RejectedOp,
     SendResult,
@@ -36,24 +37,6 @@ REASON_WRONG_LAYER = "WRONG_LAYER"
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-@dataclass(slots=True)
-class SyncDigest:
-    """批次摘要（V1.1 11.6）。同步完成后两端对比它来判断是否一致。"""
-
-    box_count: int = 0
-    can_count: int = 0
-    particle_count: int = 0
-    code_hash: str = ""
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "boxCount": self.box_count,
-            "canCount": self.can_count,
-            "particleCount": self.particle_count,
-            "codeHash": self.code_hash,
-        }
 
 
 @dataclass(slots=True)
@@ -76,12 +59,13 @@ class _ServerBatch:
     can_count: int = 0
 
     def digest(self) -> SyncDigest:
-        ordered = "\n".join(sorted(self.codes))
+        # 摘要算法只有一份（digest.code_set_hash），假实现与真实通道共用，
+        # 否则两端各写一个哈希会永远比对不上。
         return SyncDigest(
             box_count=self.box_count,
             can_count=self.can_count,
             particle_count=len(self.codes),
-            code_hash=hashlib.sha256(ordered.encode("utf-8")).hexdigest(),
+            code_hash=code_set_hash(self.codes),
         )
 
 
@@ -164,6 +148,10 @@ class InMemoryHub:
             ops = list(envelope.payload.get("ops") or [])  # type: ignore[arg-type]
             batch = self._batches.setdefault(envelope.batch_id, _ServerBatch())
 
+            # 摘要探测：只回摘要，不改数据、不推进去重状态
+            if len(ops) == 1 and int(ops[0].get("packLayer") or 0) == 0:
+                return SendResult(accepted=[envelope.seq], digest=batch.digest().to_dict())
+
             applied_any = False
             for op in ops:
                 code = str(op.get("code") or "")
@@ -186,7 +174,7 @@ class InMemoryHub:
                         RejectedOp(
                             seq=envelope.seq,
                             reason=REASON_DUPLICATE_CODE,
-                            detail={"code": code},
+                            detail={"code": code, "opId": str(op.get("opId") or "")},
                         )
                     )
                     continue
@@ -199,7 +187,11 @@ class InMemoryHub:
                             RejectedOp(
                                 seq=envelope.seq,
                                 reason=REASON_DUPLICATE_CODE,
-                                detail={"code": code, "entity": "can"},
+                                detail={
+                                    "code": code,
+                                    "entity": "can",
+                                    "opId": str(op.get("opId") or ""),
+                                },
                             )
                         )
                         continue
@@ -212,7 +204,11 @@ class InMemoryHub:
                         RejectedOp(
                             seq=envelope.seq,
                             reason=REASON_WRONG_LAYER,
-                            detail={"code": code, "packLayer": layer},
+                            detail={
+                                "code": code,
+                                "packLayer": layer,
+                                "opId": str(op.get("opId") or ""),
+                            },
                         )
                     )
                     continue
@@ -335,6 +331,9 @@ class InMemorySyncTransport:
                 combined.accepted.extend(part.accepted)
                 combined.rejected.extend(part.rejected)
                 combined.duplicate.extend(part.duplicate)
+                if part.digest is not None:
+                    # 摘要探测的应答必须透传，否则调用方永远看不到远端摘要
+                    combined.digest = part.digest
                 if part.gap_detected:
                     combined.gap_detected = True
                     combined.expected_seq = part.expected_seq

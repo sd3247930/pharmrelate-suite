@@ -59,6 +59,13 @@ class SendResult:
 
     expected_seq: int = 0
 
+    digest: dict[str, object] | None = None
+    """摘要探测请求的应答（`verify_digest` 用）。
+
+    把摘要放在这里而不是另开一个接口，是为了让摘要校验复用同一条通道与同一套
+    序号机制 —— 少一条路径就少一处不一致的可能。
+    """
+
     @property
     def ok(self) -> bool:
         return not self.rejected and not self.gap_detected
