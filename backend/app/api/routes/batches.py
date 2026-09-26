@@ -28,6 +28,7 @@ from ...schemas.batch import (
     EarlyEndPayload,
     serialize_batch_data,
 )
+from ...services.batch_creation import decide_batch_no
 from ..deps import get_batch_repository
 from ..errors import ConflictError, NotFoundError, ValidationFailedError
 
@@ -198,40 +199,19 @@ def create_batch(
     batch = payload.to_domain()
     _validate_partial_or_raise(batch)
 
-    existing = repository.find_by_batch_no(batch.batch_no)
-    if existing is not None and not payload.force_new_version:
-        # V1.1 8.4：batchNo 唯一。不直接报错挡死用户，而是给出三选一。
-        suggested = repository.next_version_no(batch.batch_no)
+    # V1.1 8.4：batchNo 唯一。不直接报错挡死用户，而是给出三选一。
+    # 决策逻辑与 XML 导入共用（app/services/batch_creation.py），避免两处漂移。
+    decision = decide_batch_no(
+        repository, batch.batch_no, force_new_version=payload.force_new_version
+    )
+    if decision.conflict is not None:
+        raise ConflictError(f"批号 {batch.batch_no} 已存在。", detail=decision.conflict)
+    if decision.exhausted:  # pragma: no cover
         raise ConflictError(
-            f"批号 {batch.batch_no} 已存在。",
-            detail={
-                "reason": "BATCH_NO_EXISTS",
-                "existing": {
-                    "id": existing.id,
-                    "batchNo": existing.batch.batch_no,
-                    "status": existing.status,
-                    "statusLabel": state.label_of(existing.status),
-                    "updatedAt": existing.updated_at,
-                    "canCount": existing.batch.can_count,
-                    "actualParticleTotal": existing.batch.actual_particle_total,
-                },
-                "suggestedBatchNo": suggested,
-                "options": [
-                    {"action": "open_existing", "label": "打开已有批次"},
-                    {"action": "create_new_version", "label": f"创建新版本 {suggested}"},
-                    {"action": "cancel", "label": "取消并返回修改"},
-                ],
-            },
+            f"新版本批号 {decision.batch_no} 已被占用，请重试。",
+            detail={"reason": "BATCH_NO_EXISTS"},
         )
-
-    if payload.force_new_version and existing is not None:
-        # 用户已明确选择「创建新版本」，此时才允许改写批号
-        batch.batch_no = repository.next_version_no(batch.batch_no)
-        if repository.find_by_batch_no(batch.batch_no) is not None:  # pragma: no cover
-            raise ConflictError(
-                f"新版本批号 {batch.batch_no} 已被占用，请重试。",
-                detail={"reason": "BATCH_NO_EXISTS"},
-            )
+    batch.batch_no = decision.batch_no
 
     record = repository.create(batch, status=state.STATUS_DRAFT)
     return _serialize(record, include_data=True)

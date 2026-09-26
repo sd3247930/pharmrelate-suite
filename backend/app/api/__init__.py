@@ -11,6 +11,7 @@ from .routes import (
     export,
     golden,
     health,
+    import_xml,
     review,
     scan,
     slots,
@@ -30,5 +31,6 @@ api_router.include_router(export.router)
 api_router.include_router(camera.router)
 api_router.include_router(audit.router)
 api_router.include_router(system.router)
+api_router.include_router(import_xml.router)
 
 __all__ = ["api_router"]

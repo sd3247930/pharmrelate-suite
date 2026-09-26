@@ -310,6 +310,23 @@ export interface ExportRecord {
   downloadUrl: string;
 }
 
+/** 导入 XML 后回显的摘要：让操作员一眼看到"导入了什么"。 */
+export interface XmlImportSummary {
+  sourceName: string;
+  batchNo: string;
+  boxCode: string;
+  canCount: number;
+  particleTotal: number;
+  plannedParticleCounts: number[];
+  status: string;
+  statusLabel: string;
+}
+
+export interface XmlImportResponse {
+  batchId: string;
+  summary: XmlImportSummary;
+}
+
 /** 条码层级判定，等价于后端的 classify_code。 */
 export function classifyCode(value: string): PackLayer | null {
   if (value.length !== CODE_LENGTH || !/^\d+$/.test(value)) return null;

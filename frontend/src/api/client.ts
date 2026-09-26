@@ -21,6 +21,7 @@ import type {
   ExportRecord,
   TransitionsResponse,
   XmlPreviewResponse,
+  XmlImportResponse,
 } from '../types/batch';
 
 export interface ApiErrorBody {
@@ -157,6 +158,22 @@ export const api = {
     request<XmlPreviewResponse>('/xml/preview', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+
+  /**
+   * 导入一期格式的关联关系 XML，新建批次。
+   *
+   * 解析与校验都在服务端（唯一权威），这里只把文件内容送过去。
+   * 批号冲突时服务端返回 409 + 三选一，由调用方交给操作员决定。
+   */
+  importXml: (payload: { xml: string; sourceName?: string; forceNewVersion?: boolean }) =>
+    request<XmlImportResponse>('/import/xml', {
+      method: 'POST',
+      body: JSON.stringify({
+        xml: payload.xml,
+        sourceName: payload.sourceName ?? '',
+        forceNewVersion: payload.forceNewVersion ?? false,
+      }),
     }),
 
   listBatches: (params?: { status?: string; search?: string }) => {

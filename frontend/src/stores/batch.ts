@@ -21,6 +21,7 @@ import {
   type CanPayload,
   type EarlyEnd,
   type TransitionOption,
+  type XmlImportSummary,
 } from '../types/batch';
 
 function todayIso(offsetDays = 0): string {
@@ -73,6 +74,16 @@ export const useBatchStore = defineStore('batch', () => {
   const conflictOptions = ref<Array<{ action: string; label: string }>>([]);
   const conflict = ref<BatchNoConflict | null>(null);
   const notice = ref('');
+  /** 最近一次导入的摘要（导入成功后界面要回显"导入了什么"）。 */
+  const importSummary = ref<XmlImportSummary | null>(null);
+
+  /**
+   * 待确认的导入内容。
+   *
+   * 批号冲突时操作员可能选"创建新版本"，那要拿**同一份 XML** 再提交一次；
+   * 不先存下来就没法重试（文件已经读进内存但界面上的选择框已经关了）。
+   */
+  const pendingImport = ref<{ xml: string; sourceName: string } | null>(null);
 
   const canCount = computed(() => plannedParticleCounts.value.length);
   const plannedParticleTotal = computed(() =>
@@ -341,9 +352,64 @@ export const useBatchStore = defineStore('batch', () => {
     }
   }
 
+  /**
+   * 导入一份 XML，新建批次并把数据回填进 store。
+
+   * 解析、结构校验、批号唯一性全部在服务端完成；这里只负责三件事：
+   * 把文件内容送出去、把冲突交给操作员、把成功结果填回界面。
+   */
+  async function importXml(
+    xml: string,
+    sourceName = '',
+    forceNewVersion = false,
+  ): Promise<boolean> {
+    busy.value = true;
+    errorMessage.value = '';
+    notice.value = '';
+    issues.value = [];
+    if (!forceNewVersion) {
+      conflict.value = null;
+      conflictOptions.value = [];
+    }
+    try {
+      const result = await api.importXml({ xml, sourceName, forceNewVersion });
+      importSummary.value = result.summary;
+      pendingImport.value = null;
+      // 回填走后端的批次详情，保证界面显示的就是库里那一份
+      await openExisting(result.batchId);
+      notice.value = `已导入 ${result.summary.sourceName || 'XML'}：${result.summary.batchNo} · ${result.summary.canCount} 罐 / ${result.summary.particleTotal} 粒`;
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.batchNoConflict && !forceNewVersion) {
+          pendingImport.value = { xml, sourceName };
+          conflict.value = error.batchNoConflict;
+          conflictOptions.value = error.options;
+          return false;
+        }
+        issues.value = error.issues;
+        errorMessage.value = error.message;
+      } else {
+        errorMessage.value = error instanceof Error ? error.message : String(error);
+      }
+      return false;
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  /** 冲突里选了"创建新版本"：用同一份 XML 再提交一次。 */
+  async function importXmlAsNewVersion(): Promise<boolean> {
+    const pending = pendingImport.value;
+    if (!pending) return false;
+    return importXml(pending.xml, pending.sourceName, true);
+  }
+
   function dismissConflict(): void {
     conflict.value = null;
     conflictOptions.value = [];
+    // 取消导入的冲突选择后，待重试的内容也一并丢掉，避免下次误提交旧文件
+    pendingImport.value = null;
   }
 
   async function changeStatus(target: string, reason = '', operator = ''): Promise<boolean> {
@@ -432,6 +498,8 @@ export const useBatchStore = defineStore('batch', () => {
     conflictOptions,
     conflict,
     notice,
+    importSummary,
+    pendingImport,
     canCount,
     plannedParticleTotal,
     actualParticleTotal,
@@ -451,6 +519,8 @@ export const useBatchStore = defineStore('batch', () => {
     refreshBatchList,
     saveDraft,
     openExisting,
+    importXml,
+    importXmlAsNewVersion,
     dismissConflict,
     changeStatus,
     registerEarlyEnd,
