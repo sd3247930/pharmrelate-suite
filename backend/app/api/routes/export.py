@@ -50,6 +50,36 @@ def history(
     return {"items": items, "total": len(items)}
 
 
+@router.get("/export/xml", summary="直接取该批次的 XML 文件（手机端一步下载）")
+def export_xml_direct(
+    batch_id: str = Query(..., alias="batchId", description="批次 id"),
+    operator: str = Query(default="mobile", description="操作人（记入导出记录）"),
+    service: ExportService = Depends(get_export_service),
+) -> Response:
+    """给手机端用的"一步拿到文件"入口。
+
+    电脑端是两步（POST 导出拿记录 → GET 下载），手机端用 uni.downloadFile
+    只能发 GET，所以这里把两步并成一步。**产出的文件与记录与电脑端完全一致** ——
+    走的是同一个 `ExportService.export`，因此导出记录、SHA-256、命名规则都不分叉。
+    代价是这个 GET 带有"创建导出记录 + 推进状态到已导出"的副作用，
+    这是为移动端刻意做的取舍，已在调用处注明。
+    """
+
+    artifacts = _guard(service.export)(batch_id, ["xml"], operator=operator)
+    if not artifacts:  # pragma: no cover - export 至少产出一个
+        raise NotFoundError(f"批次 {batch_id} 没有产出可下载的 XML。", detail={"batchId": batch_id})
+    artifact = artifacts[0]
+    return Response(
+        content=artifact.content,
+        media_type="application/xml; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+            "X-Content-SHA256": artifact.sha256,
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @router.get("/exports/{record_id}/download", summary="下载导出文件")
 def download(
     record_id: str,

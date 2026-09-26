@@ -164,3 +164,32 @@ export function captureUpload(filePath, options = {}) {
 		})
 	})
 }
+
+/**
+ * 取该批次 XML 文件的下载地址（给 uni.downloadFile 用）。
+
+ * XML 由服务端生成 —— 与电脑端导出**同一份产物**：同一条导出记录、
+ * 同一个 SHA-256、同一套命名 `Relation_{批号}_{时间戳}.xml`。
+ * 手机端不拼 XML 字符串：字节级格式只有一份实现，两处实现必然漂移。
+
+ * operator 传本机设备名，这样导出记录里能看出是哪个终端导出的。
+ */
+export function exportXmlUrl(batchId, operator) {
+	const server = getServer()
+	if (!server.baseUrl) {
+		throw new ApiError(0, {
+			error: {
+				code: 'NOT_CONFIGURED',
+				message: '尚未设置服务地址。请到「连接设置」填写 Windows 主控机的局域网地址。'
+			}
+		})
+	}
+	if (!batchId) {
+		throw new ApiError(0, {
+			error: { code: 'NOT_CONFIGURED', message: '尚未选择批次，请先到「扫码」页刷新任务状态。' }
+		})
+	}
+	const base = server.baseUrl.replace(/\/$/, '')
+	const who = encodeURIComponent(operator || 'mobile')
+	return `${base}/api/export/xml?batchId=${encodeURIComponent(batchId)}&operator=${who}`
+}

@@ -72,6 +72,27 @@
 		</view>
 
 		<view class="card">
+			<text class="card-title">导出到手机</text>
+			<text class="hint">
+				XML 由 Windows 端生成（与电脑端导出是同一份产物、同一条导出记录），
+				手机只负责保存与分享。文件名与电脑端一致：Relation_批号_时间戳.xml
+			</text>
+			<button class="primary" :disabled="busy || !canExport" @click="exportXml">
+				导出 XML 到手机
+			</button>
+			<view v-if="exportedFile" class="info-row">
+				<text class="info-key">文件</text>
+				<text class="info-value code">{{ exportedFile.filename }}</text>
+			</view>
+			<view v-if="exportedFile && exportedFile.sha256" class="info-row">
+				<text class="info-key">SHA-256</text>
+				<text class="info-value code">{{ exportedFile.sha256.slice(0, 16) }}…</text>
+			</view>
+			<text v-if="exportedFile" class="hint code">{{ exportedFile.path }}</text>
+			<button v-if="exportedFile" class="ghost" :disabled="busy" @click="shareXml">分享这个文件</button>
+		</view>
+
+		<view class="card">
 			<text class="card-title">提前结束</text>
 			<text class="hint">
 				实际少于计划时导出被禁止，需办理提前结束并填写原因与操作人。
@@ -103,8 +124,8 @@
 </template>
 
 <script>
-import { api, ApiError } from '../../services/api'
-import { getServer } from '../../services/store'
+import { api, ApiError, exportXmlUrl } from '../../services/api'
+import { getDevice, getServer } from '../../services/store'
 
 export default {
 	data() {
@@ -114,7 +135,9 @@ export default {
 			errorMessage: '',
 			reason: '',
 			operator: '',
-			note: ''
+			note: '',
+			/** 已导出的文件：保存路径 + 服务端记录的文件名与哈希 */
+			exportedFile: null
 		}
 	},
 
@@ -165,6 +188,65 @@ export default {
 			} finally {
 				this.busy = false
 			}
+		},
+
+		/**
+		 * 导出 XML 到手机：下载 → 保存到应用存储 → 显示文件名与哈希。
+
+		 * 文件内容不经过前端拼接，直接从服务端取；保存后可从导出记录里
+		 * 拿到与电脑端完全相同的文件名与 SHA-256，便于两端核对是同一份。
+		 */
+		async exportXml() {
+			const server = getServer()
+			this.busy = true
+			this.errorMessage = ''
+			try {
+				const url = exportXmlUrl(server.batchId, getDevice().name)
+				const download = await new Promise((resolve, reject) => {
+					uni.downloadFile({ url, timeout: 30000, success: resolve, fail: reject })
+				})
+				if (download.statusCode !== 200) {
+					throw new Error(`导出被服务端拒绝（HTTP ${download.statusCode}），请先完成整体核对。`)
+				}
+				const saved = await new Promise((resolve, reject) => {
+					uni.saveFile({ tempFilePath: download.tempFilePath, success: resolve, fail: reject })
+				})
+				let filename = ''
+				let sha256 = ''
+				try {
+					const history = await api.exportHistory(server.batchId)
+					const latest = (history.items || [])[0]
+					if (latest) {
+						filename = latest.filename
+						sha256 = latest.sha256
+					}
+				} catch (error) {
+					// 记录取不到不影响文件已保存这个事实
+				}
+				this.exportedFile = { path: saved.savedFilePath, filename, sha256 }
+				uni.showToast({ title: '已保存到手机', icon: 'success' })
+				await this.load()
+			} catch (error) {
+				this.errorMessage = error instanceof ApiError ? error.message : String(error)
+			} finally {
+				this.busy = false
+			}
+		},
+
+		/** 系统分享面板（App 端原生能力，不需要额外 SDK 配置）。 */
+		shareXml() {
+			if (!this.exportedFile) return
+			uni.shareWithSystem({
+				type: 'file',
+				filePath: this.exportedFile.path,
+				summary: `籽关通导出文件：${this.exportedFile.filename || ''}`,
+				success: () => uni.showToast({ title: '已打开系统分享', icon: 'none' }),
+				fail: () =>
+					uni.showToast({
+						title: '系统分享不可用，请按上面的路径到文件管理器查找',
+						icon: 'none'
+					})
+			})
 		}
 	}
 }
