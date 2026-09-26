@@ -1,8 +1,8 @@
 {
     "name" : "籽关通",
-    "appid" : "__UNI__PHARMRELATE",
-    /* appid 需在 HBuilderX 中重新获取：打开工程 → manifest.json 可视化界面 → 重新获取 appid。
-       未获取前只能跑 H5 与自定义调试基座，不能云打包。 */
+    "appid" : "__UNI__DA0B962",
+    /* appid 由 HBuilderX 在本机创建同名工程时获取，已随工程迁入本目录，可直接运行到 App 基座。
+       若需换绑到其他 DCloud 账号，打开 manifest.json 可视化界面点「重新获取 appid」即可。 */
     "description" : "籽关通 (PharmRelate Multi) 移动采集端",
     "versionName" : "0.1.0",
     "versionCode" : "100",
@@ -20,9 +20,12 @@
         },
         /* 模块配置 */
         "modules" : {
-            "Barcode" : {}
-            /* Barcode 模块用于 uni.scanCode()；Camera 未启用，
-               因为一期识别管线在 Windows 服务端，移动端只做扫码与提交。 */
+            "Barcode" : {},
+            /* Barcode：uni.scanCode() 单码扫码；
+               Camera：uni.chooseImage() 拍照，照片上传到 Windows 端识别。
+               之所以要拍照而不是只扫码：一张粒子标签纸上有多枚码，
+               扫码只能一次读一个，拍照能一次读多个（识别仍在服务端）。 */
+            "Camera" : {}
         },
         /* 应用发布信息 */
         "distribute" : {

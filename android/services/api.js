@@ -108,3 +108,59 @@ export const api = {
 			data: { reason, operator, note }
 		})
 }
+
+/**
+ * 上传一张照片做识别。
+
+ * 与 uni.scanCode 的区别：扫码一次只得到一个码；
+ * 这里一次拍一张，服务端识别出**多个**码 —— 一张粒子标签纸有好几枚，
+ * 逐个扫要扫很多次，拍一张就够。识别与拦截仍然全部在服务端。
+
+ * 图片规格（拍板 D6）：长边 ≤1920、JPEG、≤5MB。
+ * 长边由服务端识别前归一化；体积在服务端拒收并给出可读原因。
+ */
+export function captureUpload(filePath, options = {}) {
+	return new Promise((resolve, reject) => {
+		let base
+		try {
+			base = baseUrl()
+		} catch (error) {
+			reject(error)
+			return
+		}
+
+		uni.uploadFile({
+			url: `${base}/api/capture/upload`,
+			filePath,
+			name: 'photo',
+			formData: {
+				batchId: options.batchId || '',
+				maxWidth: String(options.maxWidth || 1920)
+			},
+			timeout: 30000,
+			success(response) {
+				let body = null
+				try {
+					body = JSON.parse(response.data)
+				} catch (error) {
+					body = null
+				}
+				if (response.statusCode >= 200 && response.statusCode < 300) {
+					resolve((body && body.capture) || {})
+					return
+				}
+				reject(new ApiError(response.statusCode, body || {}))
+			},
+			fail(error) {
+				reject(
+					new ApiError(0, {
+						error: {
+							code: 'NETWORK_ERROR',
+							message: `照片上传失败（${error.errMsg || '未知原因'}）。请确认已连到车间局域网。`
+						}
+					})
+				)
+			}
+		})
+	})
+}

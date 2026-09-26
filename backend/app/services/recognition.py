@@ -241,6 +241,25 @@ def load_image(path: Path):
     return image
 
 
+def decode_bytes(data: bytes, *, source: str = "<bytes>"):
+    """把内存里的图片字节解码成图像。
+
+    手机上传的照片不会先落盘，但同样要避开 `cv2.imread` 的路径编码问题 ——
+    所以走与 `load_image` 相同的"按字节解码"路线。
+    """
+
+    import cv2
+    import numpy as np
+
+    if not data:
+        raise ValueError(f"图片内容为空：{source}")
+    buffer = np.frombuffer(data, dtype=np.uint8)
+    image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"图片无法解码（不是有效的图片格式）：{source}")
+    return image
+
+
 def flatten_illumination(gray):
     """大核形态学闭运算估计背景光照，再相除。
 

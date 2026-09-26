@@ -57,6 +57,10 @@
 				{{ scanButtonText }}
 			</button>
 
+			<!-- 拍照识别：一次拍一张，服务端识别出多个码。
+			     一张粒子标签纸有多枚码，逐个扫太慢，拍一张就够。 -->
+			<button class="ghost" :disabled="busy" @click="takePhoto">拍照识别（一张纸多枚）</button>
+
 			<view v-if="status === 'box_confirm' || status === 'can_confirm'" class="actions">
 				<button class="secondary" @click="confirmPending">确认</button>
 				<button class="ghost" @click="rescan">重拍</button>
@@ -105,7 +109,7 @@
 </template>
 
 <script>
-import { api, ApiError } from '../../services/api'
+import { api, ApiError, captureUpload } from '../../services/api'
 import { getServer, getDevice, setServer, ensureDefaults } from '../../services/store'
 
 /**
@@ -320,6 +324,58 @@ export default {
 					this.errorMessage = (error && error.errMsg) || '扫码失败'
 				}
 			})
+		},
+
+		/**
+		 * 拍照识别：拍一张（或从相册选一张）交给服务端识别。
+
+		 * 与「打开扫码」的分工：扫码一次一个码；拍照一次可能出多个码。
+		 * 识别、拦截、入格全部在服务端，这里只负责取图与展示结果。
+		 */
+		async takePhoto() {
+			const filePath = await new Promise((resolve) => {
+				uni.chooseImage({
+					count: 1,
+					// 压缩画质：控制在服务端的 5MB 上限内，现场也用不着原图
+					sizeType: ['compressed'],
+					sourceType: ['camera', 'album'],
+					success: (res) => resolve((res.tempFilePaths || [])[0] || ''),
+					fail: (error) => {
+						// 用户取消不算错误
+						if (!(error && /cancel/i.test(error.errMsg || ''))) {
+							this.errorMessage = (error && error.errMsg) || '打开相机失败'
+						}
+						resolve('')
+					}
+				})
+			})
+			if (!filePath) return
+
+			this.busy = true
+			this.errorMessage = ''
+			try {
+				const capture = await captureUpload(filePath, { batchId: getServer().batchId })
+				const codes = capture.codes || []
+				if (capture.snapshot) {
+					// 有批次：交给与扫码完全相同的展示逻辑（事件、报警、进度）
+					this.applySnapshot(capture.snapshot)
+					if (codes.length > 1 && !this.blocked) {
+						this.notice = {
+							label: `本次识别到 ${codes.length} 个条码`,
+							message: codes.join('、')
+						}
+					}
+				} else {
+					this.notice = {
+						label: `识别到 ${codes.length} 个条码`,
+						message: codes.join('、') || '未识别到条码，请靠近标签重拍。'
+					}
+				}
+			} catch (error) {
+				this.handleError(error)
+			} finally {
+				this.busy = false
+			}
 		},
 
 		async submitManual() {

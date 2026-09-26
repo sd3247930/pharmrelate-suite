@@ -8,6 +8,7 @@ from .routes import (
     audit,
     batches,
     camera,
+    capture,
     export,
     golden,
     health,
@@ -32,5 +33,6 @@ api_router.include_router(camera.router)
 api_router.include_router(audit.router)
 api_router.include_router(system.router)
 api_router.include_router(import_xml.router)
+api_router.include_router(capture.router)
 
 __all__ = ["api_router"]

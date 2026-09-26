@@ -2,6 +2,28 @@
 
 > 路线：HBuilderX + uni-app（**不是 Capacitor**）
 > 状态：工程骨架，可试跑
+> 位置：`<ANDROID_PROJECT_DIR>`
+> （主仓库内 `android\` 是指向该目录的 junction，两处始终是同一份文件）
+
+---
+
+## 〇、工程放在哪
+
+2026-09-26 起，本工程的实际文件放在 HBuilderX 项目目录：
+
+```
+<ANDROID_PROJECT_DIR>
+```
+
+主仓库里的 `android\` 是一个 **目录 junction**，指向上面的目录。这样：
+
+- HBuilderX 打开的是普通本地目录，没有链接兼容问题；
+- 主仓库的 git 仍然跟踪同一批文件，`docs/`、`scripts/check-uniapp.ps1` 的引用不用改；
+- 在 HBuilderX 里编辑 = 编辑仓库内的文件，提交历史不断。
+
+**注意**：junction 不入 git。新克隆仓库的机器上 `android\` 会缺失，
+需要把该目录复制回去，或在新机器上重新建 junction —— 详见
+`docs/52-Android工程位置与迁移记录.md`。
 
 ---
 
@@ -71,10 +93,12 @@ powershell -ExecutionPolicy Bypass -File scripts\serve-lan.ps1
 
 ### 4.2 HBuilderX 打开工程
 
-1. HBuilderX → 文件 → 打开目录 → 选择本目录（`android/`）
-2. **首次打开需重新获取 appid**：manifest.json 的可视化界面 → 重新获取
-   （当前 `__UNI__PHARMRELATE` 是占位值，云打包前必须换掉）
-3. 登录 DCloud 账号（运行到 App 基座必须登录）
+1. HBuilderX → 文件 → 打开目录 → 选择本目录
+   （`<ANDROID_PROJECT_DIR>`）
+2. 登录 DCloud 账号（运行到 App 基座必须登录）
+3. appid 已随工程带入：`__UNI__DA0B962`（本机 HBuilderX 获取的，
+   不再是占位值 `__UNI__PHARMRELATE`）。若需换绑其他账号，
+   manifest.json 可视化界面 → 重新获取 appid。
 
 ### 4.3 真机运行
 
