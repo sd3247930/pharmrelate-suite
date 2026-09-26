@@ -19,9 +19,25 @@ GOLDEN_NAMES: tuple[str, ...] = ("1箱3罐.xml", "一箱一罐.xml")
 
 
 class GoldenNotFoundError(LookupError):
-    def __init__(self, name: str) -> None:
-        super().__init__(f"未知基准文件 {name!r}，可用：{'、'.join(GOLDEN_NAMES)}")
+    """基准文件不可用。
+
+    两种情况分开报："名称不在白名单"与"白名单里有但磁盘上没有"。
+    先前两种都报同一句、且"可用"列的是常量而不是目录实况，
+    结果排查时被误导成文件名编码问题 —— 实际是打包漏了文件。
+    """
+
+    def __init__(self, name: str, message: str | None = None) -> None:
+        super().__init__(message or f"基准文件 {name!r} 不可用")
         self.name = name
+
+
+def _available_names() -> list[str]:
+    """目录里实际存在的文件名，用于报错时给出真实线索。"""
+
+    try:
+        return sorted(entry.name for entry in GOLDEN_DIR.iterdir() if entry.is_file())
+    except OSError:
+        return []
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,10 +66,18 @@ class GoldenInfo:
 
 def _resolve(name: str) -> Path:
     if name not in GOLDEN_NAMES:
-        raise GoldenNotFoundError(name)
+        raise GoldenNotFoundError(
+            name,
+            f"基准文件名 {name!r} 不在白名单，允许：{'、'.join(GOLDEN_NAMES)}",
+        )
     path = GOLDEN_DIR / name
     if not path.is_file():
-        raise GoldenNotFoundError(name)
+        found = _available_names()
+        raise GoldenNotFoundError(
+            name,
+            f"基准文件 {name!r} 在白名单中，但磁盘上不存在。"
+            f"目录 {GOLDEN_DIR} 实际内容：{'、'.join(found) or '（空或目录不存在）'}",
+        )
     return path
 
 

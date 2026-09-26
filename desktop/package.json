@@ -42,11 +42,16 @@
         ]
       },
       {
+        "from": "../backend/tests/golden",
+        "to": "backend/tests/golden"
+      },
+      {
         "from": "../frontend/dist",
         "to": "frontend/dist"
       }
     ],
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         "nsis"
       ]

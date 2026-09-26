@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .api import api_router
@@ -34,6 +35,12 @@ logger = logging.getLogger("pharmrelate.api")
 
 DEFAULT_PORT = 17800
 
+# 打包态由桌面壳通过该变量把前端产物目录交给服务端，由服务端托管。
+# 这样 Electron 可以直接 loadURL(http://127.0.0.1:<port>/)，与 /api 同源：
+# 既没有 file:// 下绝对路径 404（白屏），也没有跨源拦截（CORS）。
+# 开发态不设该变量，前端仍由 Vite dev server 提供。
+FRONTEND_DIR_ENV = "PHARMRELATE_FRONTEND_DIR"
+
 # Tauri 使用 tauri://localhost（Windows 上为 http://tauri.localhost），
 # Electron 与 Vite 开发服务器用 http 本地源。二期移动端接入时再追加。
 DEFAULT_ALLOWED_ORIGINS = (
@@ -49,6 +56,21 @@ def _allowed_origins() -> list[str]:
     raw = os.environ.get("PHARMRELATE_ALLOWED_ORIGINS", "")
     extra = [item.strip() for item in raw.split(",") if item.strip()]
     return [*DEFAULT_ALLOWED_ORIGINS, *extra]
+
+
+def _frontend_dir() -> str | None:
+    """前端产物目录；未配置或不可用时返回 None（退回不托管）。"""
+
+    raw = os.environ.get(FRONTEND_DIR_ENV, "").strip()
+    if not raw:
+        return None
+    if not os.path.isdir(raw):
+        logger.warning("前端目录不存在，跳过静态托管：%s", raw)
+        return None
+    if not os.path.isfile(os.path.join(raw, "index.html")):
+        logger.warning("前端目录缺少 index.html，跳过静态托管：%s", raw)
+        return None
+    return raw
 
 
 @asynccontextmanager
@@ -101,6 +123,13 @@ def create_app(database: Database | None = None) -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+
+    # 静态托管必须挂在 API 路由之后：Starlette 按注册顺序匹配，
+    # 挂在 "/" 上的 Mount 会吞掉一切路径，放在前面就会把 /api/* 一起吃掉。
+    frontend_dir = _frontend_dir()
+    if frontend_dir is not None:
+        app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+        logger.info("前端静态托管已启用：%s", frontend_dir)
 
     logger.info("本地库：%s", app.state.database.path)
 

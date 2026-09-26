@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>籽关通：本地服务启动失败</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        padding: 48px;
+        font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+        background: #f1f4f6;
+        color: #101a22;
+        line-height: 1.6;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        color: #b91c1c;
+      }
+      p {
+        margin: 0 0 16px;
+      }
+      .muted {
+        color: #5a6b77;
+        font-size: 14px;
+      }
+      pre {
+        margin: 0;
+        padding: 16px;
+        background: #ffffff;
+        border: 1px solid #d6dee3;
+        border-radius: 8px;
+        font-family: Consolas, Menlo, monospace;
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 340px;
+        overflow: auto;
+      }
+      ol {
+        margin: 0 0 16px;
+        padding-left: 22px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>本地服务启动失败</h1>
+    <p>
+      界面没有加载，因为随程序启动的 Python 本地服务没有就绪。这是启动故障，不是数据问题——
+      已采集的数据仍在本地库中。
+    </p>
+    <p class="muted">失败原因：</p>
+    <pre id="detail">（未提供详细信息）</pre>
+
+    <p class="muted" style="margin-top: 24px">按顺序排查：</p>
+    <ol>
+      <li>确认安装目录完整：<code>resources\backend\app</code> 与 <code>resources\backend\tests\golden</code> 都存在。</li>
+      <li>确认本机可运行 Python：打包版会用系统 <code>python</code> 启动服务。</li>
+      <li>查看日志：<code>%APPDATA%\PharmRelate Multi\logs\desktop.log</code>，里面含后端完整输出。</li>
+      <li>若怀疑端口被占用或安全软件拦截，先关闭占用再重启本程序。</li>
+    </ol>
+
+    <script>
+      // 主进程加载完本页后调用，把失败原因填进来
+      window.__showBootError = function (message) {
+        document.getElementById("detail").textContent = String(message || "（未提供详细信息）");
+      };
+    </script>
+  </body>
+</html>
