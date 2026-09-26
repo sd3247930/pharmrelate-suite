@@ -35,6 +35,9 @@ const exceedCanLimit = computed(() =>
 const emptyCan = computed(() =>
   batch.plannedParticleCounts.some((value) => !value || value < 1),
 );
+/** 罐数已顶到上下限：再按也加不上去，得说清楚为什么，而不是按钮默默失效。 */
+const canCountAtMin = computed(() => batch.canCount <= MIN_CANS);
+const canCountAtMax = computed(() => batch.canCount >= MAX_CANS);
 const canContinue = computed(
   () => batch.plannedParticleCounts.length > 0 && !batch.overBatchLimit && !exceedCanLimit && !emptyCan,
 );
@@ -88,6 +91,16 @@ function goNext(): void {
         <em>范围 {{ MIN_CANS }}～{{ MAX_CANS }}</em>
       </div>
 
+      <p
+        v-if="batch.editable && (canCountAtMin || canCountAtMax)"
+        class="structure__hint"
+        role="status"
+        data-testid="can-count-hint"
+      >
+        罐数必须在 {{ MIN_CANS }}～{{ MAX_CANS }} 之间：当前已是
+        {{ canCountAtMin ? '下限' : '上限' }} {{ batch.canCount }} 罐。
+      </p>
+
       <ul class="structure__cans">
         <li v-for="(planned, index) in batch.plannedParticleCounts" :key="index">
           <div class="structure__can-head">
@@ -104,7 +117,9 @@ function goNext(): void {
             :error="
               planned > MAX_PARTICLES_PER_CAN
                 ? `不得超过 ${MAX_PARTICLES_PER_CAN} 粒`
-                : ''
+                : !planned || planned < 1
+                  ? '每个粒子数必须 ≥ 1'
+                  : ''
             "
             @update:model-value="batch.clampParticles(index)"
           />
@@ -281,5 +296,12 @@ function goNext(): void {
   background: var(--color-danger-soft);
   border: 1px solid var(--color-danger-border);
   border-radius: var(--radius-md);
+}
+
+/* 顶到边界时的说明：不是错误，是规则，所以用中性色而不是红色 */
+.structure__hint {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
 }
 </style>
