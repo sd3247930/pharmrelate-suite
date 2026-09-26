@@ -5,6 +5,12 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\check.ps1
     powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -SkipDesktop
+    powershell -ExecutionPolicy Bypass -File scripts\check.ps1 -Full
+
+说明：
+    默认 11 项；-Full 追加"打包态 UI 冒烟"（需要先 cd desktop; npm run dist）。
+    打包态那条会启动真实安装产物并断言界面渲染、后端可用 —— 白屏与漏打包
+    这两类缺陷只有它会发现，所以发版前应当跑 -Full。
 
 退出码 0 表示全部通过。
 #>
@@ -12,7 +18,8 @@
 param(
     [switch]$SkipFrontendBuild,
     [switch]$SkipE2E,
-    [switch]$SkipDesktop
+    [switch]$SkipDesktop,
+    [switch]$Full
 )
 
 $ErrorActionPreference = 'Continue'
@@ -103,6 +110,13 @@ if (-not $SkipE2E) {
 if (-not $SkipDesktop) {
     Invoke-Step -Name '桌面壳冒烟（Electron 拉起 Python 服务）' -WorkingDirectory $desktopDir `
         -Command @('npm', 'run', 'smoke')
+}
+
+# 打包态 UI 冒烟：唯一会真正打开窗口的检查，白屏与漏打包只有它拦得住。
+# 需要先 npm run dist，故放在 -Full 里，不进默认 11 项。
+if ($Full) {
+    Invoke-Step -Name '打包态 UI 冒烟（真实安装产物）' -WorkingDirectory $desktopDir `
+        -Command @('npm', 'run', 'smoke:packed')
 }
 
 Write-Host ''
