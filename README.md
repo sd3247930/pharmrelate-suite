@@ -2,8 +2,18 @@
 
 跨平台三级包装（箱 → 罐 → 粒子）关联管理系统。
 
-当前处于**一期：Windows 端单机闭环**，已完成阶段 0（基准冻结）、
-阶段 1（工程骨架与设计系统）与阶段 2（数据持久化与批次状态机）。
+**当前状态（2026-09-28）**
+
+| 端 | 状态 |
+| --- | --- |
+| Windows 主控机 | 一期单机闭环**已完成**：基准冻结 → 工程骨架/设计系统 → 数据持久化与批次状态机 → 扫码采集 → 预览与导出 → 验收 |
+| Android 采集端（uni-app） | **v1.3.5 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；箱/罐自然数校验；本机 XML 生成与 HTML 导出；识别契约层 + 人工确认降级 |
+
+一条命令跑完全部检查（后端 + 前端 + 桌面壳 + Android 静态检查）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\check.ps1
+```
 
 ## 拍板结论（2026-09-25 确认）
 
@@ -46,6 +56,12 @@ desktop/                   桌面壳（Electron 主壳 + Tauri 备选实现）
 scripts/                   一键开发与一键检查脚本
 docs/                      决策记录与阶段记录
 private/                   需求文档与原始样例（只读输入区）
+android/                   Android 采集端（uni-app / HBuilderX）
+  pages/                   扫码采集 · 任务状态 · 连接设置（三 Tab）
+  services/localBatch.js   ★ 本地数据层（多箱结构 / 状态机 / 槽位 / 撤销 / 核对 / 老数据迁移）
+  services/xmlGenerator.js ★ 本机 XML 生成（与后端 xml_builder.py 字节级一致）
+  services/numberRecognizer.js  自然数视觉识别契约层（可插拔 Provider + 人工确认降级）
+  tests/                   Node 单测（本地数据层 223 + XML 50 + 识别契约 59）
 ```
 
 ## 快速开始
@@ -172,8 +188,47 @@ cd backend
 [通过] 桌面壳冒烟（Electron 拉起 Python 服务）
 ```
 
+## Android 采集端（uni-app / HBuilderX）
+
+工程实体在 `<ANDROID_PROJECT_DIR>`，
+仓库内 `android/` 是指向它的 junction（同一份文件，git 正常跟踪）。
+
+### 怎么跑
+
+1. HBuilderX → 文件 → 打开目录 → 选该工程目录 → 登录 DCloud 账号；
+2. 运行(R) → 运行到手机或模拟器(N) → 运行到 Android App 基座；
+3. 手机上：设置 → 填批号/生产日期/有效期 → 保存草稿 → 配「N 箱 × 每箱 M 罐 × 每罐 K 粒」
+   → 保存结构，进入采集 → 扫码页按向导采集 → 状态页核对。
+
+**不需要起后端也能走完整流程**（本地驱动、离线可用）；设置页的「服务地址」只作二期同步预研用。
+
+### 能力一览
+
+| 能力 | 说明 |
+| --- | --- |
+| 多箱包装结构 | `boxes[] → cans[] → particles[]`；箱 1~5、每箱罐数各自独立 1~5、每罐 1~2500、单批 ≤12500；v1.3.0 单箱老数据自动迁移 |
+| 引导式采集 | 相位 `箱 → 罐 → 粒子 → 本罐核对 → 本箱核对 → 整体核对`，不能跳步；箱/罐自然数（1~9999），粒子仍是 20 位条码 |
+| 分层查重 | 箱号全批唯一 / 罐号本箱唯一 / 粒子码全批唯一 —— 自然数下三者必须分作用域，否则「箱 1 + 罐 1」会互相冲突 |
+| 三条采集通道 | ① 摄像头扫码（仅条形码）② 拍照识别 ③ 手动输入；手动面板默认折叠、点开才聚焦 |
+| 本机 XML | 按后端 `xml_builder.py` 的字节级规则本机生成，状态页原样预览（长文本自动折行），并导出 `.html`（`Relation_{批号}_{时间}.html`） |
+| 离线降级 | 断网只提示「当前为离线模式，数据将保存在本机」，三页无红色阻断 |
+| 识别契约层 | `numberRecognizer.js` 输出 `{success, number, confidence, sourceType, needsConfirmation, candidates}`；当前无端侧 OCR，默认 Provider 严格失败 → 降级人工读数（**不猜测、不补位**） |
+
+### 测试
+
+```powershell
+cd android
+node tests\localBatch.test.mjs       # 本地数据层 223 项
+node tests\xmlGenerator.test.mjs     # XML 生成器 50 项（含与后端基准逐字节比对）
+node tests\numberRecognizer.test.mjs # 识别契约层 59 项
+```
+
+真机端到端脚本与截图证据在 `private\测试输出\`（该目录不入库，可重跑生成）。
+
 ## 后续阶段
 
-阶段 3 扫码采集（最高优先级）→ 阶段 4 预览与导出 → 阶段 5 验收。
+一期 Windows 单机闭环与 Android 采集端均已完成。二期方向：多端同步（SyncMeta / oplog 已预留）、
+粒子多码拍照识别、离线补发与多端互斥锁、账号与权限。
 
-详细进展见 [docs/01-阶段记录.md](docs/01-阶段记录.md)。
+详细进展见 [docs/01-阶段记录.md](docs/01-阶段记录.md)，
+Android 端设计说明见 [android/README.md](android/README.md)。

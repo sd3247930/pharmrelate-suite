@@ -44,6 +44,9 @@ backend/exports/
 # 打包态冒烟的失败现场（截图与日志）
 desktop/artifacts/
 
+# 测试证据产物（截图/报告/临时导出）—— 体积大且可重跑生成
+private/测试输出/
+
 # 注意：以下路径必须入库，禁止加入忽略规则
 #   backend/tests/golden/     字节级黄金基准
 #   backend/tests/fixtures/   独立手写锚点
