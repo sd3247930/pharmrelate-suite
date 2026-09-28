@@ -48,11 +48,33 @@ function section(title) {
 	console.log(`\n==== ${title} ====`)
 }
 
+/**
+ * 找基准文件。三条路子，**都不写死本机绝对路径**：
+ *   1. 从本文件往上两级 —— 仓库里 android/ 是指向 HBuilderX 工程目录的 junction，
+ *      所以从仓库路径跑时 `../../backend/tests/golden/` 就是仓库的 backend；
+ *   2. HBuilderX 工程目录单独跑时够不到仓库，用环境变量 PHARMRELATE_GOLDEN_XML 指过来；
+ *   3. 都没有就用工程内自带的副本 `tests/fixtures/golden-1箱3罐.xml`，
+ *      保证在任何目录下都能跑。
+ *
+ * 第 3 条是「副本」，所以下面加了一条防漂移断言：只要后端基准也能找到，
+ * 就要求两者逐字节一致 —— 副本过期会立刻红，不会静默放过。
+ */
+const BACKEND_GOLDEN = resolve(here, '..', '..', 'backend', 'tests', 'golden', '1箱3罐.xml')
+const LOCAL_GOLDEN = resolve(here, 'fixtures', 'golden-1箱3罐.xml')
 const GOLDEN_CANDIDATES = [
-	resolve(here, '..', '..', 'backend', 'tests', 'golden', '1箱3罐.xml'),
-	'<REPO_ROOT>\\backend\\tests\\golden\\1箱3罐.xml'
-]
+	BACKEND_GOLDEN,
+	process.env.PHARMRELATE_GOLDEN_XML || '',
+	LOCAL_GOLDEN
+].filter(Boolean)
 const goldenPath = GOLDEN_CANDIDATES.find((item) => existsSync(item))
+
+if (existsSync(BACKEND_GOLDEN) && existsSync(LOCAL_GOLDEN)) {
+	equal(
+		readFileSync(LOCAL_GOLDEN, 'utf8'),
+		readFileSync(BACKEND_GOLDEN, 'utf8'),
+		'工程内基准副本与 backend/tests/golden/1箱3罐.xml 逐字节一致（副本不能悄悄过期）'
+	)
+}
 
 /** 与 backend/tests/golden/1箱3罐.xml 对应的本地批次（1 箱 3 罐 3 粒）。 */
 const goldenBatch = {

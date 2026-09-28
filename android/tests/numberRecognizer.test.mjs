@@ -1,5 +1,5 @@
 /**
- * 自然数视觉识别契约层单测（v1.3.4）。
+ * 追溯码视觉识别契约层单测（v1.4.0）。
  *
  * 重点验证「识别只负责看见什么数字、业务层负责校验」这条边界：
  * 不猜测、不补位、不把字母转成数字、置信度阈值、噪声剔除、多候选保留。
@@ -60,7 +60,7 @@ equal(nr.getProviderName(), 'manualConfirmProvider', '默认 Provider 是 manual
 }
 
 // ---------------------------------------------------------------------------
-section('② 噪声剔除：段落标记 / 空格 / 下划线 / 光标残留')
+section('② 噪声剔除：段落标记 / 空格 / 下划线 / 光标残留 / 连字符')
 // ---------------------------------------------------------------------------
 
 const ok = (raw) => nr.normalizeResult(raw)
@@ -73,6 +73,21 @@ equal(ok({ success: true, number: '1\u200B', confidence: 0.9 }).number, '1', '�
 equal(ok({ success: true, number: ' 12\u21B5 ', confidence: 0.95 }).number, '12', '多位数 12↵ 也得 12')
 equal(ok({ success: true, number: '01', confidence: 0.9 }).number, '01', '前导零原样保留（业务层允许）')
 equal(nr.sanitizeDigits('1\u21B5 _ 2'), '12', 'sanitizeDigits 只剔噪声、不改变数字')
+// 现场罐码标签印的就是「8021762-9000000001003」：分段连字符属于排版噪声
+equal(
+	ok({ success: true, number: '8021762-9000000001003', confidence: 0.95 }).number,
+	'80217629000000001003',
+	'罐码分段连字符被剔除（8021762-9000000001003 → 20 位）'
+)
+equal(
+	nr.sanitizeDigits(' 8021762 - 9000000001003 '),
+	'80217629000000001003',
+	'连字符两侧带空格也能剔干净'
+)
+equal(nr.sanitizeDigits('1-2-3'), '123', '连续分段 1-2-3 全部剔除')
+equal(nr.sanitizeDigits('80217629000000001003'), '80217629000000001003', '本身无连字符 → 幂等')
+equal(nr.sanitizeDigits('8206233-000003000001'), '8206233000003000001', '粒子码分段连字符同样按噪声剔除')
+equal(nr.sanitizeDigits('-1'), '-1', '行首负号保留（它是符号，不是分段符）')
 
 // ---------------------------------------------------------------------------
 section('③ 字母不转数字 / 不猜测 / 不补位')
@@ -105,14 +120,18 @@ equal(ok({ success: true, number: '1' }).needsConfirmation, true, '缺置信度 
 equal(ok({ success: false, number: '1', confidence: 0.99 }).needsConfirmation, true, '失败时一律要求人工确认')
 
 // ---------------------------------------------------------------------------
-section('⑤ 职责边界：识别层不做业务判断（上限交业务层）')
+section('⑤ 职责边界：识别层不做业务判断（长度 / 前缀交业务层）')
 // ---------------------------------------------------------------------------
 
-const big = ok({ success: true, number: '10000', confidence: 0.95 })
-equal(big.success, true, '识别层对 10000 仍返回 success=true（它确实看见了 10000）')
-equal(big.number, '10000', '识别层如实返回 10000，不做业务拦截')
-check(nr.normalizeResult({ success: true, number: '9999', confidence: 0.9 }).success, '9999 正常返回')
-check(!('max' in big), '识别结果里没有业务上限字段')
+const shortCode = ok({ success: true, number: '8021761000001406604', confidence: 0.95 }) // 19 位
+equal(shortCode.success, true, '识别层对 19 位仍返回 success=true（它确实看见了这些数字）')
+equal(shortCode.number, '8021761000001406604', '识别层如实返回 19 位，不做业务拦截')
+check(
+	nr.normalizeResult({ success: true, number: '80217629000000001002', confidence: 0.9 }).success,
+	'前缀是罐号的串在箱号步骤也照常返回，由业务层去拦'
+)
+check(!('max' in shortCode), '识别结果里没有业务上限字段')
+check(!('prefix' in shortCode), '识别结果里没有业务前缀字段')
 
 // ---------------------------------------------------------------------------
 section('⑥ 多候选 candidates')

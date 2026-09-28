@@ -24,8 +24,10 @@
  * `particles` 就是槽位数组：下标 = 采集顺序，空串 = 还没扫。**严禁排序**。
  *
  * 三条不可违背的约束（写死在这里，页面不许绕开）：
- *   1. 分层校验：箱号 / 罐号是**自然数**（1~9999，现场就是 1、2、3），
- *      只有粒子码才是 20 位 ASCII 数字 + 前缀 8206233；**不要把 20 位规则套到箱/罐上**；
+ *   1. 分层校验：箱号 / 罐号 / 粒子码**统一是 20 位 ASCII 数字 + 前缀**
+ *      （箱 8021761、罐 8021762、粒子 8206233），层级只由前缀决定。
+ *      现场罐码二维码印的是 `8021762-9000000001003`，所以箱/罐入库前必须先剥连字符
+ *      （见 cleanLayerCode）——「弹窗显示什么，库里就存什么」；
  *   2. `cascade` 是固定字面量 "1:5:2500"，不随实际箱数、罐数或粒子数变化；
  *   3. 粒子顺序 = 采集原始顺序，**严禁排序**。
  * 另外查重是**分层作用域**的：箱号全批唯一、罐号本箱内唯一、粒子码全批唯一（见 findUsage）。
@@ -344,41 +346,36 @@ export function layerLabel(layer) {
 const LAYER_FULL_LABELS = { 3: '箱号', 2: '罐号', 1: '粒子码' }
 
 /**
- * 分层校验规则（v1.3.2 拍板）：
- *   - 箱号 / 罐号：**自然数**（现场就是 1、2、3 这种），允许前导零，范围 1~9999；
- *   - 粒子码：仍然是 20 位 ASCII 数字 + 前缀 8206233（这条绝对不动）。
- * 早期版本把 20 位条码规则错套在箱/罐上，导致现场录不进「1」——这里是修正点。
+ * 层级码清洗（扫码 / 拍照识别 / 手动输入三条通道共用，是校验与落库的唯一前置入口）。
+ *
+ * 现场实物（2026-09-28 追加）：
+ *   - 箱号：一维条形码，标签印「药品标示码：8021761 序列号：9000000001002」，合并后 20 位；
+ *   - 罐号：二维码，标签印 `8021762-9000000001003`，**带连字符**。
+ * 因此箱 / 罐必须先剥掉连字符再参与校验与落库 —— 保证「弹窗显示什么，库里就存什么」。
+ * 粒子码本身就是 20 位纯数字，保持原样、不做任何改写。
+ * 清洗是幂等的：对本身就不带连字符的 20 位内容调用无副作用。
  */
-export const MAX_NATURAL = 9999
-export const NATURAL_PATTERN = /^\d+$/
-
-/** 箱/罐号是否为合法自然数（1~9999，允许前导零，最多 4 位）。 */
-export function isNaturalCode(value) {
+export function cleanLayerCode(value, layer) {
 	const code = String(value == null ? '' : value).trim()
-	if (!NATURAL_PATTERN.test(code)) return false
-	if (code.length > 4) return false
-	const number = Number(code)
-	return number >= 1 && number <= MAX_NATURAL
+	if (layer === 3 || layer === 2) return code.replace(/-/g, '')
+	return code
 }
 
 /**
  * 层级码格式校验（给「手动输入箱号/罐号」与三条采集通道共用）。
  * 返回空串表示通过；否则返回一句能直接给操作员看的中文提示。
  *
+ * 口径（v1.4.0 拍板）：箱 / 罐 / 粒子**同一套规则** —— 20 位纯数字 + 前缀匹配，
+ * 箱/罐先清洗连字符再判。v1.3.2 的「箱/罐 = 短号 1~9999」旧口径已彻底作废。
+ *
  * 只做格式校验，不查重、不写数据 —— 命中的码仍然要走 applyCodes，
  * 这样状态机与去重逻辑只有一份（避免手动输入绕开既有规则）。
  */
 export function validateLayerCode(value, layer) {
-	const code = String(value == null ? '' : value).trim()
-	const label = LAYER_FULL_LABELS[layer] || '条码'
 	if (!CODE_PREFIXES[layer]) return `未知的层级：${layer}`
+	const code = cleanLayerCode(value, layer)
+	const label = LAYER_FULL_LABELS[layer] || '条码'
 	if (!code) return `${label}不能为空。`
-	if (layer === 3 || layer === 2) {
-		if (!isNaturalCode(code)) {
-			return `${label}必须是 1~${MAX_NATURAL} 之间的自然数（如 1、2、3），不能含字母、小数或符号。`
-		}
-		return ''
-	}
 	const prefix = CODE_PREFIXES[layer]
 	if (code.length !== BARCODE_LENGTH || !/^\d+$/.test(code) || code.indexOf(prefix) !== 0) {
 		return `${label}必须为 ${BARCODE_LENGTH} 位数字，且前缀为 ${prefix}`
@@ -393,9 +390,9 @@ export function validateLayerCode(value, layer) {
 export function describeCodeIssue(value, layer) {
 	const issue = validateLayerCode(value, layer)
 	if (!issue) return ''
-	const code = String(value == null ? '' : value).trim()
+	const code = cleanLayerCode(value, layer)
 	if (layer !== 1 && classifyCode(code) === 1) {
-		return `这是粒子条码，${LAYER_FULL_LABELS[layer] || '条码'}只需要自然数（1~${MAX_NATURAL}）。`
+		return `这是粒子条码，${LAYER_FULL_LABELS[layer] || '条码'}需要 ${BARCODE_LENGTH} 位追溯码（前缀 ${CODE_PREFIXES[layer]}）。`
 	}
 	return issue
 }
@@ -704,7 +701,7 @@ export function deriveWizard(batch) {
 				step: 1,
 				phase: PHASE.BOX,
 				...where,
-				prompt: `请拍摄/输入箱号（第 ${b + 1} 箱 / 共 ${totalBoxes} 箱，自然数 1~${MAX_NATURAL}）`
+				prompt: `请扫描箱号条形码（第 ${b + 1} 箱 / 共 ${totalBoxes} 箱，前缀 ${CODE_PREFIXES[3]}）`
 			})
 		}
 
@@ -717,7 +714,7 @@ export function deriveWizard(batch) {
 					phase: PHASE.CAN,
 					...where,
 					canIndex,
-					prompt: `请拍摄/输入箱 ${b + 1} 罐 ${canIndex} 号（自然数 1~${MAX_NATURAL}）`
+					prompt: `请扫描罐号方形码（箱 ${b + 1} 罐 ${canIndex}，前缀 ${CODE_PREFIXES[2]}）`
 				})
 			}
 			const filled = filledCount(can)
@@ -772,8 +769,8 @@ export function deriveWizard(batch) {
  *   - 罐号（layer 2）：**本箱内唯一** —— 箱 1 的罐 1 与箱 2 的罐 1 都是合法的「1」；
  *   - 粒子码（layer 1）：**全批唯一** —— 20 位条码是物理唯一的。
  *
- * 为什么必须分层：箱/罐改成自然数后，「1」这种值天然会在不同层级重复出现，
- * 再用全批不分层级查重会把「箱 1 + 罐 1」判成重复，直接录不进去。
+ * 为什么必须分层：历史批次里箱/罐曾是 1~9999 的短号（如「1」），这种值天然会在
+ * 不同层级、不同箱里重复出现，用全批不分层级查重会把「箱 1 + 罐 1」判成重复。
  *
  * context（都是 0 起的索引）：
  *   - excludeBoxIndex：查箱号时跳过自己（改号场景）
@@ -872,8 +869,9 @@ export function applyCodes(batch, codes) {
 				)
 			}
 		}
-		const code = list[0]
-		// 箱/罐走自然数校验（不再用 20 位条码规则）；粒子码另有自己的分支
+		// 兜底清洗：即使调用方漏了，这里也保证落库的是剥掉连字符的纯 20 位
+		const code = cleanLayerCode(list[0], expectedLayer)
+		// 箱/罐与粒子码同一套口径（20 位 + 前缀），层级只由前缀决定
 		const issueMessage = describeCodeIssue(code, expectedLayer)
 		if (issueMessage) {
 			return {

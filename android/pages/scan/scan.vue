@@ -73,7 +73,7 @@
 			<!-- 阶段 1 验收点：扫码是这个页面上最显眼的主按钮，直接调摄像头 -->
 			<view v-if="wizard.phase === 'box'" class="actions">
 				<button class="primary scan-btn" :disabled="busy" @click="scanBox">
-					① 📷 打开摄像头扫码（第 {{ wizard.boxIndex }} / {{ wizard.totalBoxes }} 箱）
+					① 📷 扫描箱号条形码（第 {{ wizard.boxIndex }} / {{ wizard.totalBoxes }} 箱）
 				</button>
 				<button class="secondary" :disabled="busy" @click="capturePhoto('box')">② 🖼 拍照识别箱号</button>
 				<button class="ghost" :disabled="busy" @click="toggleManual">
@@ -81,13 +81,13 @@
 				</button>
 				<view v-if="manualOpen" class="manual-box">
 					<text class="hint">
-						箱号是自然数（如 1、2、3），不能含字母、小数或符号，上限 9999。输入框只在点开这一步时才聚焦。
+						箱号在实物上是一维条形码，需为 20 位数字且前缀 8021761。输入框只在点开这一步时才聚焦。
 					</text>
 					<input
 						class="input code"
 						v-model="manualValue"
 						:focus="manualFocus"
-						placeholder="请输入/拍摄箱号（自然数，如 1、2、3）"
+						placeholder="请输入 20 位箱号（前缀 8021761）"
 						confirm-type="done"
 						@confirm="submitManualLayer"
 					/>
@@ -96,7 +96,7 @@
 			</view>
 			<view v-else-if="wizard.phase === 'can'" class="actions">
 				<button class="primary scan-btn" :disabled="busy" @click="scanCan">
-					① 📷 打开摄像头扫码（箱 {{ wizard.boxIndex }} 罐 {{ wizard.canIndex }} 号）
+					① 📷 扫描罐号方形码（箱 {{ wizard.boxIndex }} 罐 {{ wizard.canIndex }}）
 				</button>
 				<button class="ghost" :disabled="busy" @click="scanCan">重拍</button>
 				<button class="secondary" :disabled="busy" @click="capturePhoto('can')">
@@ -107,13 +107,13 @@
 				</button>
 				<view v-if="manualOpen" class="manual-box">
 					<text class="hint">
-						罐号是自然数（如 1、2、3），不能含字母、小数或符号，上限 9999。输入框只在点开这一步时才聚焦。
+						罐号在实物上是方形二维码，需为 20 位数字且前缀 8021762；标签上印的连字符会在入库前自动去掉。输入框只在点开这一步时才聚焦。
 					</text>
 					<input
 						class="input code"
 						v-model="manualValue"
 						:focus="manualFocus"
-						placeholder="请输入/拍摄罐号（自然数，如 1、2、3）"
+						placeholder="请输入 20 位罐号（前缀 8021762）"
 						confirm-type="done"
 						@confirm="submitManualLayer"
 					/>
@@ -143,7 +143,7 @@
 			</view>
 
 			<text class="hint">
-				箱号 / 罐号 = 自然数（1~9999）；粒子 = 20 位条码。多码、错层、重复、溢出都会震动报警。
+				箱号 = 一维条形码（前缀 8021761）；罐号 = 方形二维码（前缀 8021762），标签上的连字符自动清洗；粒子 = 20 位条码（前缀 8206233）。多码、错层、重复、溢出都会震动报警。
 				现场没有条码或字迹不清时，用「拍照识别」把画面拍下来照着输入，或用「手动输入」直接键入。
 			</text>
 			<text v-if="cameraHint" class="alarm-hint">{{ cameraHint }}</text>
@@ -276,11 +276,13 @@ import { recognizeNumber } from '../../services/numberRecognizer'
 import { ensureDefaults } from '../../services/store'
 import {
 	ALARM_EVENTS,
+	CODE_PREFIXES,
 	EVENT,
 	EVENT_LABELS,
 	PHASE,
 	STATUS_LABELS,
 	applyCodes,
+	cleanLayerCode,
 	confirmBoxReview,
 	confirmCanReview,
 	deleteSlot,
@@ -540,11 +542,16 @@ export default {
 			uni.showToast({ title: '请到系统设置 → 应用 → 权限 里开启相机', icon: 'none' })
 		},
 
-		/** 调摄像头扫一个条码（阶段 1：强制 onlyFromCamera + 只认条形码）。 */
-		scanCode(callback) {
+		/**
+		 * 调摄像头扫一个码。scanType 由调用方指定：箱号只认一维条形码、
+		 * 罐号只认方形二维码、粒子只认条形码。
+		 * 注意：部分国产 ROM 的基座会忽略 scanType 直接返回扫到的任意码，
+		 * 所以「扫错类型」的最终拦截靠业务层的 20 位 + 前缀校验（describeCodeIssue）。
+		 */
+		scanCode(scanType, callback) {
 			uni.scanCode({
 				onlyFromCamera: true,
-				scanType: ['barCode'],
+				scanType,
 				success: (result) => {
 					this.cameraHint = ''
 					callback(result.result)
@@ -561,20 +568,20 @@ export default {
 			})
 		},
 
-		/** 阶段 4：拍箱号（多箱循环，文案带第 X / 共 Y 箱）。 */
+		/** 阶段 4：扫箱号（一维条形码；多箱循环，文案带第 X / 共 Y 箱）。 */
 		async scanBox() {
 			if (!this.batch) return
 			if (this.wizard.phase !== PHASE.BOX) return
 			if (!(await this.ensureCamera())) return
-			this.scanCode((code) => this.considerSingle(code, 'box'))
+			this.scanCode(['barCode'], (code) => this.considerSingle(code, 'box'))
 		},
 
-		/** 阶段 1 / 4：拍罐号。 */
+		/** 阶段 1 / 4：扫罐号（方形二维码）。 */
 		async scanCan() {
 			if (!this.batch) return
 			if (this.wizard.phase !== PHASE.CAN) return
 			if (!(await this.ensureCamera())) return
-			this.scanCode((code) => this.considerSingle(code, 'can'))
+			this.scanCode(['qrCode'], (code) => this.considerSingle(code, 'can'))
 		},
 
 		/** 阶段 2.2：粒子逐个扫码（C2：本期不做多码拍照）。 */
@@ -582,17 +589,18 @@ export default {
 			if (!this.batch) return
 			if (this.wizard.phase !== PHASE.PARTICLE) return
 			if (!(await this.ensureCamera())) return
-			this.scanCode((code) => this.handle(applyCodes(this.batch, [code])))
+			this.scanCode(['barCode'], (code) => this.handle(applyCodes(this.batch, [code])))
 		},
 
 		/**
-		 * 业务层收口（识别层之外唯一的写入路径）：自然数格式校验 → 分层查重 → 写本地数据层。
-		 * 校验不通过不说「必须为 20 位」，而是按层级给出自然数口径的提示（describeCodeIssue）。
+		 * 业务层收口（识别层之外唯一的写入路径）：清洗 → 20 位 + 前缀校验 → 分层查重 → 写本地数据层。
+		 * 这里再清洗一次是兜底：拍照识别通道会绕过 considerSingle 直接调进来。
 		 */
-		commitLayerCode(code, kind) {
+		commitLayerCode(rawCode, kind) {
 			if (!this.batch) return false
 			const wizard = deriveWizard(this.batch)
 			const expected = kind === 'box' ? 3 : 2
+			const code = cleanLayerCode(rawCode, expected)
 			if (wizard.phase !== (kind === 'box' ? PHASE.BOX : PHASE.CAN)) {
 				this.event = eventOf(EVENT.WRONG_STATE, '步骤已经变了，请按当前提示操作。', false)
 				return false
@@ -621,21 +629,27 @@ export default {
 			return true
 		},
 
-		/** 扫码 / 手动输入通道：校验通过后先弹确认框，[是] 才写入。 */
-		considerSingle(code, kind) {
+		/**
+		 * 扫码 / 手动输入 / 拍照识别三条通道的统一收口。
+		 * 清洗放在最前面：罐号二维码内容带连字符（如 8021762-9000000001003），
+		 * 必须在校验与弹窗之前剥掉，才能保证「弹窗显示什么，库里就存什么」。
+		 */
+		considerSingle(rawCode, kind) {
 			const wizard = deriveWizard(this.batch)
 			const expected = kind === 'box' ? 3 : 2
 			const label = kind === 'box' ? '箱号' : '罐号'
+			const code = cleanLayerCode(rawCode, expected)
 			const issue = describeCodeIssue(code, expected)
 			if (issue) {
 				uni.showModal({ title: `${label}格式不对`, content: issue, showCancel: false })
 				return
 			}
+			const prefix = CODE_PREFIXES[expected]
 			uni.showModal({
 				title:
 					kind === 'box'
-						? `这是第 ${wizard.boxIndex} 箱的箱号吗？`
-						: `这是箱 ${wizard.boxIndex} 罐 ${wizard.canIndex} 号吗？`,
+						? `这是第 ${wizard.boxIndex} 箱的箱号吗？(${prefix}...)`
+						: `这是箱 ${wizard.boxIndex} 罐 ${wizard.canIndex} 号吗？(${prefix}...)`,
 				content: code,
 				confirmText: '是',
 				cancelText: '否',
@@ -822,7 +836,7 @@ export default {
 		},
 
 		/**
-		 * 步骤 1 / 2.1 的手动输入：多号码报警 → 自然数校验 → 确认弹窗 → 才写入。
+		 * 步骤 1 / 2.1 的手动输入：多号码报警 → 清洗 + 20 位前缀校验 → 确认弹窗 → 才写入。
 		 * 与扫码/拍照通道走的是同一条收口（considerSingle），保证规则只有一份。
 		 */
 		submitManualLayer() {
@@ -1227,6 +1241,18 @@ export default {
 .slot-can-code {
 	font-size: 22rpx;
 	color: #5a6b77;
+}
+
+/* 20 位箱号 / 罐号在窄屏上必须能折行：
+   不给 min-width:0 的话，flex 子项会直接溢出而不是换行。 */
+.box-head .code,
+.slot-can-code.code {
+	flex: 1;
+	min-width: 0;
+	margin-left: 12rpx;
+	text-align: right;
+	word-break: break-all;
+	word-wrap: break-word;
 }
 
 .slot-grid {

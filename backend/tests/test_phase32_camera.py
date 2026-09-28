@@ -73,7 +73,7 @@ class FrameSourceFactoryTests(unittest.TestCase):
             source.close()
 
 
-@unittest.skipUnless(PHOTO.is_file(), f"缺少真实照片：{PHOTO}")
+@unittest.skipIf(PHOTO is None, "缺少现场实拍照片（已从公开仓库移出）")
 class TestImageSourceTests(unittest.TestCase):
     def test_reads_frames_in_a_loop(self) -> None:
         source = TestImageFrameSource([PHOTO])
@@ -111,7 +111,7 @@ class TestImageSourceTests(unittest.TestCase):
             TestImageFrameSource([])
 
 
-@unittest.skipUnless(PHOTO.is_file(), f"缺少真实照片：{PHOTO}")
+@unittest.skipIf(PHOTO is None, "缺少现场实拍照片（已从公开仓库移出）")
 class CameraManagerTests(TempDatabaseTestCase):
     def setUp(self) -> None:
         super().setUp()

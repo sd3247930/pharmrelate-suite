@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -37,9 +38,11 @@ BRAND_DARK = (10, 85, 96, 255)   # #0a5560
 ACCENT = (232, 163, 61, 255)     # #e8a33d
 
 # 中文字体候选（Windows 自带；Linux / macOS 上按顺序回退）
+# Windows 字体目录走 %WINDIR%，源码里不写死盘符与用户名
+_WIN_FONTS = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
 FONT_CANDIDATES = [
-    r"C:\Windows\Fonts\msyhbd.ttc",
-    r"C:\Windows\Fonts\msyh.ttc",
+    str(_WIN_FONTS / "msyhbd.ttc"),
+    str(_WIN_FONTS / "msyh.ttc"),
     "/System/Library/Fonts/PingFang.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
 ]

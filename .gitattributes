@@ -4,6 +4,10 @@ backend/tests/golden/*.xml -text
 private/*.XML -text
 private/*.jpg -text
 
+# Android 侧带的基准副本必须与 backend/tests/golden/1箱3罐.xml 逐字节一致，
+# 同样禁止换行归一化，否则 xmlGenerator 单测会因 CRLF 而失败。
+android/tests/fixtures/*.xml -text
+
 # 源码统一使用 LF
 *.py    text eol=lf
 *.ts    text eol=lf

@@ -19,6 +19,9 @@ PHOTO = resolve_photo()
 BOX = "80217619000000001003"
 CAN = "80217629000000001005"
 
+# 照片已随 private/ 移出公开仓库：拿不到就 skip，而不是让整个套件收集失败。
+needs_photo = unittest.skipIf(PHOTO is None, "缺少现场实拍照片（已从公开仓库移出）")
+
 
 def jpeg_bytes(width: int, height: int) -> bytes:
     import cv2
@@ -34,7 +37,7 @@ class CaptureUploadTests(TempDatabaseTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.client = TestClient(self.make_app())
-        self.photo = PHOTO.read_bytes()
+        self.photo = PHOTO.read_bytes() if PHOTO is not None else b""
 
     def upload(self, data: bytes, *, filename: str = "photo.jpg", batch_id: str = ""):
         return self.client.post(
@@ -65,6 +68,7 @@ class CaptureUploadTests(TempDatabaseTestCase):
         return batch_id
 
     # ---------------------------------------------------------------- 识别
+    @needs_photo
     def test_photo_recognises_particle_codes(self) -> None:
         response = self.upload(self.photo, filename=PHOTO.name)
         self.assertEqual(response.status_code, 200, response.text)
@@ -77,6 +81,7 @@ class CaptureUploadTests(TempDatabaseTestCase):
         self.assertEqual((capture["width"], capture["height"]), (3072, 4096))
         self.assertEqual(capture["variantsUsed"], ["原图"])
 
+    @needs_photo
     def test_upload_without_batch_does_not_touch_state(self) -> None:
         """不带批次号时只识别，不写入任何批次 —— 手机在设置页试拍就是这条路径。"""
 
@@ -85,6 +90,7 @@ class CaptureUploadTests(TempDatabaseTestCase):
         self.assertIsNone(response.json()["capture"]["snapshot"])
 
     # ------------------------------------------------------------ 状态机
+    @needs_photo
     def test_upload_fills_six_particles_in_one_frame(self) -> None:
         batch_id = self.make_scanning_batch(plan=[6], box=BOX, can=CAN)
         before = self.client.get(f"/api/scan/{batch_id}/session").json()
@@ -98,6 +104,7 @@ class CaptureUploadTests(TempDatabaseTestCase):
         self.assertEqual(snapshot["remainingInCan"], 0)
         self.assertEqual(snapshot["canParticles"][0], response.json()["capture"]["codes"])
 
+    @needs_photo
     def test_many_codes_at_box_step_are_rejected(self) -> None:
         """拍箱号时一张纸多枚 → 多码报警，整帧不写入（与电脑端同一规则）。"""
 
@@ -127,6 +134,7 @@ class CaptureUploadTests(TempDatabaseTestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["detail"]["reason"], "PHOTO_TOO_SMALL")
 
+    @needs_photo
     def test_unknown_batch_is_rejected(self) -> None:
         response = self.upload(self.photo, batch_id="不存在的批次")
         self.assertEqual(response.status_code, 422)

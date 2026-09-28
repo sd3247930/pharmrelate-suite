@@ -62,21 +62,22 @@ function memoryAdapter() {
 const storage = memoryAdapter()
 lb.setStorageAdapter(storage)
 
-// 造码工具：粒子码仍是 20 位（前缀固定）；箱号 / 罐号是自然数
+// 造码工具：箱 / 罐 / 粒子**统一是 20 位追溯码**，层级只由前缀决定（v1.4.0）
 const boxCode = (n) => '8021761' + String(n).padStart(13, '0')
 const canCode = (n) => '8021762' + String(n).padStart(13, '0')
 const particle = (n) => '8206233' + String(n).padStart(13, '0')
 
-// 20 位条码：只用于 classifyCode 与「误扫粒子条码」这类断言
+// 20 位条码：用于 classifyCode 与层级断言
 const BOX_BARCODE = boxCode(1001)
 const CAN_BARCODE = canCode(2001)
 
-// 业务值：箱号 / 罐号是自然数（v1.3.2 拍板），罐号在本箱内唯一所以多箱可以重复
-const BOX1 = '1'
-const BOX2 = '2'
-const CAN1 = '1'
-const CAN2 = '2'
-const CAN3 = '1'
+// 业务值（v1.4.0）：箱号 / 罐号与粒子码同口径 —— 20 位 + 前缀。
+// 罐号在本箱内唯一，所以不同箱可以复用同一个罐号（CAN3 与 CAN1 相同）。
+const BOX1 = boxCode(1)
+const BOX2 = boxCode(2)
+const CAN1 = canCode(1)
+const CAN2 = canCode(2)
+const CAN3 = canCode(1)
 const P1 = particle(3001)
 const P2 = particle(3002)
 const P3 = particle(3003)
@@ -111,7 +112,7 @@ equal(lb.classifyCode(BOX_BARCODE), 3, '20 位串 8021761… → classifyCode �
 equal(lb.classifyCode(CAN_BARCODE), 2, '20 位串 8021762… → classifyCode 判为层级 2')
 equal(lb.classifyCode(P1), 1, '粒子码前缀 8206233 → 层级 1')
 equal(lb.classifyCode('8021761000001412585'), null, '19 位 → 拒绝')
-equal(lb.classifyCode('802176190000000010036'), null, '21 位 → 拒绝')
+equal(lb.classifyCode('802176190000000010031'), null, '21 位 → 拒绝')
 equal(lb.classifyCode('8021761000001412585A'), null, '含字母 → 拒绝')
 equal(lb.classifyCode('99999990000014125856'), null, '未知前缀 → 拒绝')
 equal(lb.classifyCode('  ' + BOX_BARCODE + '  '), 3, '首尾空格容忍')
@@ -121,57 +122,57 @@ equal(lb.FIXED_PARAMS.length, 13, '固定参数 13 项')
 equal(lb.SCHEMA_VERSION, 2, '数据结构版本 = 2（多箱）')
 
 // ---------------------------------------------------------------------------
-section('分层校验：箱/罐 = 自然数（1~9999），粒子 = 20 位条码')
+section('分层校验：箱 / 罐 / 粒子 = 20 位追溯码 + 前缀（v1.4.0）')
 // ---------------------------------------------------------------------------
 
-equal(lb.MAX_NATURAL, 9999, '自然数上限 = 9999')
-equal(lb.isNaturalCode('1'), true, '「1」是自然数')
-equal(lb.isNaturalCode('12'), true, '多位数「12」是一个合法自然数')
-equal(lb.isNaturalCode('01'), true, '「01」允许（现场标签可能印前导零）')
-equal(lb.isNaturalCode('9999'), true, '「9999」在上限内')
-equal(lb.isNaturalCode('0'), false, '「0」不是自然数 → 拒绝')
-equal(lb.isNaturalCode('10000'), false, '「10000」超上限 → 拒绝')
-equal(lb.isNaturalCode('-1'), false, '「-1」含符号 → 拒绝')
-equal(lb.isNaturalCode('1.5'), false, '「1.5」是小数 → 拒绝')
-equal(lb.isNaturalCode('1a'), false, '「1a」含字母 → 拒绝')
-equal(lb.isNaturalCode(''), false, '空串 → 拒绝')
+equal(lb.BARCODE_LENGTH, 20, '统一长度 = 20 位')
+equal(lb.CODE_PREFIXES[3], '8021761', '箱号前缀 = 8021761')
+equal(lb.CODE_PREFIXES[2], '8021762', '罐号前缀 = 8021762')
+equal(lb.CODE_PREFIXES[1], '8206233', '粒子前缀 = 8206233')
 
-// 正向：这四个必须都能过（文档验收）
-equal(lb.validateLayerCode('1', 3), '', '箱号「1」→ 通过（不再要求 20 位）')
-equal(lb.validateLayerCode('12', 3), '', '箱号「12」→ 通过')
-equal(lb.validateLayerCode('01', 3), '', '箱号「01」→ 通过')
-equal(lb.validateLayerCode('9999', 3), '', '箱号「9999」→ 通过')
-equal(lb.validateLayerCode('1', 2), '', '罐号「1」→ 通过')
-equal(lb.validateLayerCode(P1, 1), '', '粒子码 → 通过（20 位规则不变）')
+// 连字符清洗：现场罐码二维码印的就是「8021762-9000000001003」
+equal(lb.cleanLayerCode('8021762-9000000001003', 2), '80217629000000001003', '罐号：剥掉连字符')
+equal(lb.cleanLayerCode(' 8021762-9000000001003 ', 2), '80217629000000001003', '罐号：首尾空格 + 连字符一起清')
+equal(lb.cleanLayerCode('80217629000000001003', 2), '80217629000000001003', '罐号：清洗幂等（本身无连字符）')
+equal(lb.cleanLayerCode('8021761-9000000001002', 3), '80217619000000001002', '箱号：同样剥连字符')
+equal(lb.cleanLayerCode('8206233-000003000001', 1), '8206233-000003000001', '粒子码：保持原样，不清洗')
 
-// 反向：这些必须被拦
-check(lb.validateLayerCode('0', 3).includes('1~9999'), '箱号「0」→ 拦截并提示 1~9999', lb.validateLayerCode('0', 3))
-check(lb.validateLayerCode('-1', 3).includes('1~9999'), '箱号「-1」→ 拦截并提示 1~9999', lb.validateLayerCode('-1', 3))
-check(lb.validateLayerCode('1.5', 3).includes('1~9999'), '箱号「1.5」→ 拦截并提示 1~9999', lb.validateLayerCode('1.5', 3))
-check(lb.validateLayerCode('1a', 3).includes('1~9999'), '箱号「1a」→ 拦截并提示 1~9999', lb.validateLayerCode('1a', 3))
-check(lb.validateLayerCode('10000', 3).includes('1~9999'), '箱号「10000」→ 拦截并提示 1~9999', lb.validateLayerCode('10000', 3))
+// 正向：20 位 + 前缀正确 → 通过
+equal(lb.validateLayerCode('80217619000000001002', 3), '', '箱号 20 位 + 8021761 → 通过')
+equal(lb.validateLayerCode(BOX1, 3), '', '箱号（造码工具）→ 通过')
+equal(lb.validateLayerCode('8021761-9000000001002', 3), '', '箱号带连字符 → 清洗后通过')
+equal(lb.validateLayerCode('8021762-9000000001003', 2), '', '罐号带连字符 → 清洗后通过（文档验收点）')
+equal(lb.validateLayerCode(CAN1, 2), '', '罐号（造码工具）→ 通过')
+equal(lb.validateLayerCode(P1, 1), '', '粒子码 → 通过（规则不变）')
+
+// 反向：长度 / 字符 / 前缀不对 → 拦
+check(lb.validateLayerCode('1', 3).includes('20 位'), '箱号「1」→ 拦截并要求 20 位', lb.validateLayerCode('1', 3))
+check(lb.validateLayerCode('10000', 3).includes('20 位'), '箱号「10000」→ 拦截并要求 20 位', lb.validateLayerCode('10000', 3))
+check(lb.validateLayerCode('1.5', 3).includes('20 位'), '箱号「1.5」→ 拦截', lb.validateLayerCode('1.5', 3))
+check(lb.validateLayerCode('1a', 3).includes('20 位'), '箱号「1a」→ 拦截', lb.validateLayerCode('1a', 3))
+check(lb.validateLayerCode('8021761000001406604', 3).includes('20 位'), '箱号 19 位 → 拦截', lb.validateLayerCode('8021761000001406604', 3))
+check(lb.validateLayerCode('80217629000000001002', 3).includes('8021761'), '箱号用了罐号前缀 → 拦截并指出 8021761', lb.validateLayerCode('80217629000000001002', 3))
+check(lb.validateLayerCode('80217619000000001002', 2).includes('8021762'), '罐号用了箱号前缀 → 拦截并指出 8021762', lb.validateLayerCode('80217619000000001002', 2))
+check(lb.validateLayerCode('99999999000000001002', 3).includes('20 位'), '未知前缀 → 拦截', lb.validateLayerCode('99999999000000001002', 3))
 check(lb.validateLayerCode('', 3).includes('不能为空'), '空串 → 提示不能为空')
-check(
-	lb.validateLayerCode(P1, 3).includes('1~9999'),
-	'粒子条码当箱号 → 也按自然数口径拦截',
-	lb.validateLayerCode(P1, 3)
-)
-check(lb.validateLayerCode('1', 1).includes('20 位'), '自然数当粒子码 → 仍要求 20 位', lb.validateLayerCode('1', 1))
+check(lb.validateLayerCode(P1, 3).includes('8021761'), '粒子条码当箱号 → 提示里给出箱号前缀', lb.validateLayerCode(P1, 3))
+check(lb.validateLayerCode('1', 1).includes('20 位'), '短号当粒子码 → 仍要求 20 位', lb.validateLayerCode('1', 1))
 equal(lb.validateLayerCode('1', 9), '未知的层级：9', '未知层级 → 明确报错')
 
 // 面向操作员的文案：箱/罐步骤误扫粒子条码要给专门提示
 check(
-	lb.describeCodeIssue(P1, 3).includes('这是粒子条码') && lb.describeCodeIssue(P1, 3).includes('箱号只需要自然数'),
-	'箱号步骤误扫粒子条码 → 提示「这是粒子条码，箱号只需要自然数」',
+	lb.describeCodeIssue(P1, 3).includes('这是粒子条码') && lb.describeCodeIssue(P1, 3).includes('8021761'),
+	'箱号步骤误扫粒子条码 → 提示「这是粒子条码…前缀 8021761」',
 	lb.describeCodeIssue(P1, 3)
 )
 check(
-	lb.describeCodeIssue(P1, 2).includes('这是粒子条码') && lb.describeCodeIssue(P1, 2).includes('罐号只需要自然数'),
+	lb.describeCodeIssue(P1, 2).includes('这是粒子条码') && lb.describeCodeIssue(P1, 2).includes('8021762'),
 	'罐号步骤误扫粒子条码 → 同样给粒子条码提示',
 	lb.describeCodeIssue(P1, 2)
 )
-check(lb.describeCodeIssue('1', 3) === '', '合法自然数 → 无提示')
-check(lb.describeCodeIssue('1a', 3).includes('1~9999'), '非法字符 → 自然数提示', lb.describeCodeIssue('1a', 3))
+check(lb.describeCodeIssue(BOX1, 3) === '', '合法箱号 → 无提示')
+check(lb.describeCodeIssue('8021762-9000000001003', 2) === '', '带连字符的合法罐号 → 无提示')
+check(lb.describeCodeIssue('1a', 3).includes('20 位'), '非法字符 → 20 位提示', lb.describeCodeIssue('1a', 3))
 
 // ---------------------------------------------------------------------------
 section('基础信息校验')
@@ -383,7 +384,7 @@ let twoBox = draft([[1], [1]])
 twoBox = scan(twoBox, [BOX1, CAN1, P1])
 twoBox = lb.confirmCanReview(twoBox, true).batch
 twoBox = lb.confirmBoxReview(twoBox, true).batch
-equal(lb.applyCodes(twoBox, [BOX1]).event.code, lb.EVENT.DUPLICATE_CODE, '箱号全批唯一：第 2 箱再用「1」→ 拒绝')
+equal(lb.applyCodes(twoBox, [BOX1]).event.code, lb.EVENT.DUPLICATE_CODE, '箱号全批唯一：第 2 箱复用同一个箱号 → 拒绝')
 check(
 	lb.applyCodes(twoBox, [BOX1]).event.message.includes('箱 1 号'),
 	'箱号重复时提示指明是哪一箱占用',
@@ -392,9 +393,9 @@ check(
 twoBox = lb.applyCodes(twoBox, [BOX2]).batch
 // 罐 1 在箱 1 里已用过，但箱 2 的罐 1 依然是合法值 → 必须放行
 const crossBoxCan = lb.applyCodes(twoBox, [CAN1])
-equal(crossBoxCan.event.code, lb.EVENT.OK, '罐号本箱内唯一：箱 2 罐 1 与箱 1 罐 1 同为「1」→ 允许')
-equal(crossBoxCan.batch.boxes[1].cans[0].canCode, '1', '箱 2 罐 1 的罐号写入成功')
-equal(crossBoxCan.batch.boxes[0].cans[0].canCode, '1', '箱 1 罐 1 原值不受影响')
+equal(crossBoxCan.event.code, lb.EVENT.OK, '罐号本箱内唯一：箱 2 罐 1 与箱 1 罐 1 用同一个罐号 → 允许')
+equal(crossBoxCan.batch.boxes[1].cans[0].canCode, CAN1, '箱 2 罐 1 的罐号写入成功')
+equal(crossBoxCan.batch.boxes[0].cans[0].canCode, CAN1, '箱 1 罐 1 原值不受影响')
 
 // 同一箱内重复罐号仍要挡住
 let sameBox = draft([[1, 1]])
@@ -402,15 +403,15 @@ sameBox = scan(sameBox, [BOX1, CAN1, P1])
 sameBox = lb.confirmCanReview(sameBox, true).batch
 const sameBoxDup = lb.applyCodes(sameBox, [CAN1])
 equal(sameBoxDup.event.code, lb.EVENT.DUPLICATE_CODE, '同一箱内罐号重复 → 拒绝')
-check(sameBoxDup.event.message.includes('罐号 1 已被使用'), '罐号重复提示带层级叫法', sameBoxDup.event.message)
+check(sameBoxDup.event.message.includes(`罐号 ${CAN1} 已被使用`), '罐号重复提示带层级叫法', sameBoxDup.event.message)
 
 // findUsage 的分层作用域（显式传 layer 的三种口径）
 const settled = crossBoxCan.batch
-equal(lb.findUsage(settled, '1', 3).where, '箱 1 号', 'findUsage(layer 3)：命中箱 1 号')
-equal(lb.findUsage(settled, '1', 2, { boxIndex: 0 }).where, '箱 1 罐 1 号', 'findUsage(layer 2, 箱 1)：命中箱 1 罐 1')
-equal(lb.findUsage(settled, '1', 2, { boxIndex: 1 }).where, '箱 2 罐 1 号', 'findUsage(layer 2, 箱 2)：命中箱 2 罐 1（同名但不同箱）')
-equal(lb.findUsage(settled, '1', 2, { boxIndex: 1, excludeCanIndex: 0 }), null, 'findUsage(layer 2) 排除自己后不命中')
-equal(lb.findUsage(settled, '1', 3, { excludeBoxIndex: 0 }), null, 'findUsage(layer 3) 排除自己后不命中')
+equal(lb.findUsage(settled, BOX1, 3).where, '箱 1 号', 'findUsage(layer 3)：命中箱 1 号')
+equal(lb.findUsage(settled, CAN1, 2, { boxIndex: 0 }).where, '箱 1 罐 1 号', 'findUsage(layer 2, 箱 1)：命中箱 1 罐 1')
+equal(lb.findUsage(settled, CAN1, 2, { boxIndex: 1 }).where, '箱 2 罐 1 号', 'findUsage(layer 2, 箱 2)：命中箱 2 罐 1（同号但不同箱）')
+equal(lb.findUsage(settled, CAN1, 2, { boxIndex: 1, excludeCanIndex: 0 }), null, 'findUsage(layer 2) 排除自己后不命中')
+equal(lb.findUsage(settled, BOX1, 3, { excludeBoxIndex: 0 }), null, 'findUsage(layer 3) 排除自己后不命中')
 equal(lb.findUsage(settled, '9', 2, { boxIndex: 1 }), null, '没出现过的号 → 不命中')
 
 // ---------------------------------------------------------------------------

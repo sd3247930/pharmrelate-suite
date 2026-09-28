@@ -15,7 +15,7 @@ Android（手机）直接打开 <https://sd3247930.github.io/PharmRelate-Multi/>
 | 端 | 状态 |
 | --- | --- |
 | Windows 主控机 | 一期单机闭环**已完成**：基准冻结 → 工程骨架/设计系统 → 数据持久化与批次状态机 → 扫码采集 → 预览与导出 → 验收 |
-| Android 采集端（uni-app） | **v1.3.6 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；箱/罐自然数校验；本机 XML 生成与 HTML 导出；生产包名与圆形 Logo 固化；识别契约层 + 人工确认降级 |
+| Android 采集端（uni-app） | **v1.4.0 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；**箱号扫一维条形码 / 罐号扫方形二维码**（20 位追溯码 + 前缀校验、连字符自动清洗）；本机 XML 生成与 HTML 导出；识别契约层 + 人工确认降级 |
 | 手机网页版 / APK 分发 | **已上线**：GitHub Pages 分发站 + 固定资产名 APK 直链（首次发布 `v1.3.5`），一条命令发版（`scripts\publish-apk.ps1`） |
 
 一条命令跑完全部检查（后端 + 前端 + 桌面壳 + Android 静态检查）：
@@ -71,7 +71,7 @@ android/                   Android 采集端（uni-app / HBuilderX）
   pages/                   扫码采集 · 任务状态 · 连接设置（三 Tab）
   services/localBatch.js   ★ 本地数据层（多箱结构 / 状态机 / 槽位 / 撤销 / 核对 / 老数据迁移）
   services/xmlGenerator.js ★ 本机 XML 生成（与后端 xml_builder.py 字节级一致）
-  services/numberRecognizer.js  自然数视觉识别契约层（可插拔 Provider + 人工确认降级）
+  services/numberRecognizer.js  追溯码视觉识别契约层（可插拔 Provider + 人工确认降级）
   tests/                   Node 单测（本地数据层 223 + XML 50 + 识别契约 59）
 ```
 
@@ -108,8 +108,8 @@ powershell -ExecutionPolicy Bypass -File scripts\check.ps1
 
 | 基准文件 | 字节 | SHA-256（重建 = 原始） |
 | --- | --- | --- |
-| 1箱3罐.xml | 1,285 | `560b9d34b1bb608fb265df6c536fdfbd9a5ce9307cff04b33fb8cfd749164e11` |
-| 一箱一罐.xml | 39,109 | `9e8c1409cd6ea3c67ae28f4bb9dccb858ab77b27febff8035fecc5d514f26d99` |
+| 1箱3罐.xml | 1,285 | `43c19388b2280fd2aba7bbdeac85a1fa27aa69e464f0266d9718cfdcadc8a464` |
+| 一箱一罐.xml | 39,109 | `ee1e6302936965061783bbf0aaa302a276a6e69e7831419aacdb57c96ec6a967` |
 
 单独复核：
 
@@ -218,9 +218,9 @@ cd backend
 | 能力 | 说明 |
 | --- | --- |
 | 多箱包装结构 | `boxes[] → cans[] → particles[]`；箱 1~5、每箱罐数各自独立 1~5、每罐 1~2500、单批 ≤12500；v1.3.0 单箱老数据自动迁移 |
-| 引导式采集 | 相位 `箱 → 罐 → 粒子 → 本罐核对 → 本箱核对 → 整体核对`，不能跳步；箱/罐自然数（1~9999），粒子仍是 20 位条码 |
-| 分层查重 | 箱号全批唯一 / 罐号本箱唯一 / 粒子码全批唯一 —— 自然数下三者必须分作用域，否则「箱 1 + 罐 1」会互相冲突 |
-| 三条采集通道 | ① 摄像头扫码（仅条形码）② 拍照识别 ③ 手动输入；手动面板默认折叠、点开才聚焦 |
+| 引导式采集 | 相位 `箱 → 罐 → 粒子 → 本罐核对 → 本箱核对 → 整体核对`，不能跳步；箱/罐/粒子统一 20 位追溯码，**箱号只扫一维条形码、罐号只扫方形二维码**、粒子只扫条形码 |
+| 分层查重 | 箱号全批唯一 / 罐号本箱唯一 / 粒子码全批唯一 —— 三者必须分作用域，否则「箱 1 的罐 1」与「箱 2 的罐 1」会互相冲突 |
+| 三条采集通道 | ① 摄像头扫码（箱号=条形码 / 罐号=二维码）② 拍照识别 ③ 手动输入；手动面板默认折叠、点开才聚焦 |
 | 本机 XML | 按后端 `xml_builder.py` 的字节级规则本机生成，状态页原样预览（长文本自动折行），并导出 `.html`（`Relation_{批号}_{时间}.html`） |
 | 离线降级 | 断网只提示「当前为离线模式，数据将保存在本机」，三页无红色阻断 |
 | 识别契约层 | `numberRecognizer.js` 输出 `{success, number, confidence, sourceType, needsConfirmation, candidates}`；当前无端侧 OCR，默认 Provider 严格失败 → 降级人工读数（**不猜测、不补位**） |
@@ -229,9 +229,9 @@ cd backend
 
 ```powershell
 cd android
-node tests\localBatch.test.mjs       # 本地数据层 223 项
+node tests\localBatch.test.mjs       # 本地数据层 225 项
 node tests\xmlGenerator.test.mjs     # XML 生成器 50 项（含与后端基准逐字节比对）
-node tests\numberRecognizer.test.mjs # 识别契约层 59 项
+node tests\numberRecognizer.test.mjs # 识别契约层 66 项
 ```
 
 真机端到端脚本与截图证据在 `private\测试输出\`（该目录不入库，可重跑生成）。
@@ -243,3 +243,51 @@ node tests\numberRecognizer.test.mjs # 识别契约层 59 项
 
 内部阶段记录（`docs/`，已于 2026-09-28 移出公开仓库）不再随代码分发；
 Android 端设计说明见 [android/README.md](android/README.md)。
+
+## 数据脱敏与仓库卫生规范
+
+本仓库是**公开**仓库，代码、基准与文档里**一律不得出现真实生产数据**。
+2026-09-29 做过一次全量脱敏（含历史重写），规则固化如下。
+
+### 不入库的东西
+
+| 类别 | 处理 |
+| --- | --- |
+| 内部资料（需求文档、决策记录、阶段记录） | 放 `docs/`，已移出仓库并加入 `.gitignore`，只在本机保留 |
+| 现场实物照片、标签照片、测试证据 | 放 `private/`，同样已移出仓库并忽略 |
+| 签名证书与口令 | `private/签名证书/`，绝不入库 |
+| APK 等二进制产物 | `private/构建产物/`；对外只走 GitHub Release |
+
+### 脱敏后的固定值
+
+基准与代码里的业务标识全部是**虚构值**，与真实产品无关：
+
+| 项 | 虚构值 |
+| --- | --- |
+| 许可证 `License` | `1001123` |
+| 产品编码 `productCode` | `9999999` |
+| 子类型 `subTypeNo` | `9500000001` |
+| 车间 `workshop` | `一号车间` |
+| 生产线 `lineName` | `一号生产线` |
+| 负责人 `lineManager` | `操作员甲`（名单 `操作员甲/乙/丙/丁`） |
+| 追溯码 | 前缀保留（箱 `8021761` / 罐 `8021762` / 粒子 `8206233`），序列号统一以 **9** 打头，如 `80217619000000001003` |
+
+真实序列号一律以 `0` 打头，**看到以 9 打头的序列号就是脱敏值**，别当成现场数据。
+
+### 新增代码时的自查
+
+1. 不提交任何现场照片、真实条码、真实车间/人员名、真实许可证号；
+2. 源码里不写本机绝对路径 —— 用相对路径、环境变量或参数（例如
+   `scripts/publish-apk.ps1` 的 `-HbuilderApkDir` / `PHARMRELATE_HBUILDER_APK_DIR`、
+   `ANDROID_SDK_BUILD_TOOLS`）；
+3. 测试里不要硬编码「照片解出来的具体条码」，改成断言结构（前缀、长度、数量、冲突行为）；
+4. 提交前跑 `powershell -ExecutionPolicy Bypass -File scripts\check.ps1`。
+
+### 本地跑真图用例
+
+现场照片不在仓库里，依赖它的识别与摄像头用例会 **skip**（pytest 汇总里能看到 skipped 计数，
+不是静默通过）。本地要跑真图用例，把照片放回 `private\条形码.jpg`，或设置：
+
+```powershell
+$env:PHARMRELATE_PHOTO = "<本机标签照片路径>"
+```

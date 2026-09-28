@@ -30,20 +30,11 @@ from app.services.recognition import (
 
 PHOTO = resolve_photo()
 
-# 照片上 6 枚标签的药品标识码(8206233) + 序列号
-EXPECTED_SERIALS = (
-    "0000110265841",
-    "0000110271913",
-    "0000110280860",
-    "0000110295569",
-    "0000110307353",
-    "0000110313029",
-)
-EXPECTED_CODES = {f"8206233{serial}" for serial in EXPECTED_SERIALS}
-
-# 全分辨率下会出现的解码伪影：同一位置被解出的第二个值
-PHANTOM_CODE = "82062339000000001007"
-TRUE_CODE_OF_THAT_REGION = "82062339000000001006"
+# 照片上那 6 枚标签的**具体条码值不写死在仓库里**：照片本身含真实药品追溯码，
+# 且已随 private/ 移出公开仓库。期望值一律从解码结果里取，
+# 断言的是「行为与结构」（几枚、什么前缀、是否冲突、是否被采信），
+# 而不是「具体是哪两串数字」—— 后者会把真实追溯码又抄回源码里。
+PARTICLE_CODE_PATTERN = r"^8206233\d{13}$"
 
 
 class GeometryTests(unittest.TestCase):
@@ -99,7 +90,7 @@ class PreprocessTests(unittest.TestCase):
         self.assertEqual(flattened.shape[:2], (64, 64))
 
 
-@unittest.skipUnless(PHOTO.is_file(), f"缺少真实照片：{PHOTO}")
+@unittest.skipIf(PHOTO is None, "缺少现场实拍照片（已从公开仓库移出）")
 class RealPhotoTests(unittest.TestCase):
     """真实照片验收。"""
 
@@ -116,11 +107,11 @@ class RealPhotoTests(unittest.TestCase):
     def test_default_settings_decode_all_six_labels(self) -> None:
         result = decode_file(PHOTO, expected_min=6)
 
-        self.assertEqual(
-            set(result.codes),
-            EXPECTED_CODES,
-            f"应解出照片上的 6 枚标签，实际得到 {sorted(result.codes)}",
-        )
+        codes = sorted(result.codes)
+        self.assertEqual(len(codes), 6, f"应解出照片上的 6 枚标签，实际得到 {codes}")
+        self.assertEqual(len(set(codes)), 6, "六枚标签的条码必须互不相同")
+        for code in codes:
+            self.assertRegex(code, PARTICLE_CODE_PATTERN, "照片上都是 20 位粒子码（前缀 8206233）")
         self.assertEqual(result.conflicts, [], "默认分辨率下不应有冲突")
         self.assertEqual(result.variants_used, ["原图"], "首轮即达标，不应升级到其它预处理")
 
@@ -154,18 +145,21 @@ class RealPhotoTests(unittest.TestCase):
         它同样是 8206233 开头的 20 位数字，能通过格式与前缀校验，
         所以必须由"同区域冲突"把它拦住 —— 而且**两个值都不能被自动采信**，
         宁可要求重扫，也不静默绑定一个可能是错的码。
+
+        断言不引用任何写死的条码值（理由见文件头），只校验冲突的行为与结构。
         """
 
         result = decode_frame(self.image, expected_min=6, max_width=0)
 
-        conflicted = {text for conflict in result.conflicts for text in conflict.candidates}
-        self.assertIn(PHANTOM_CODE, conflicted, "幻影码应被识别为冲突")
-        self.assertIn(TRUE_CODE_OF_THAT_REGION, conflicted, "同区域真码也不能被自动采信")
-        self.assertNotIn(PHANTOM_CODE, result.codes, "幻影码绝不能出现在接受结果里")
-        self.assertNotIn(TRUE_CODE_OF_THAT_REGION, result.codes)
-
-        self.assertEqual(len(result.conflicts), 1)
+        self.assertEqual(len(result.conflicts), 1, "全分辨率下应恰好有一处同区域冲突")
         conflict = result.conflicts[0]
+
+        conflicted = list(dict.fromkeys(conflict.candidates))
+        self.assertEqual(len(conflicted), 2, f"冲突区域应有两个互斥候选，实际 {conflicted}")
+        for code in conflicted:
+            self.assertRegex(code, PARTICLE_CODE_PATTERN, "冲突候选都应是 20 位粒子码")
+            self.assertNotIn(code, result.codes, "冲突候选一个都不能被自动采信")
+
         self.assertIn("support", conflict.to_dict())
         self.assertGreater(conflict.region.area, 0)
 

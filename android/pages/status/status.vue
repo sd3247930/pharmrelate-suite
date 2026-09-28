@@ -67,7 +67,7 @@
 				<view v-for="box in review.perBox" :key="box.boxIndex" class="box-group">
 					<view class="row-between box-head">
 						<text class="box-title">箱 {{ box.boxIndex }}</text>
-						<text class="hint">
+						<text class="hint box-code-line">
 							{{ box.boxCode || '（未扫箱号）' }} · 计划 {{ box.plannedCans }} 罐 / 实际 {{ box.scannedCans }} 罐
 						</text>
 					</view>
@@ -488,6 +488,16 @@ export default {
 
 .box-head {
 	margin-bottom: 4rpx;
+}
+
+/* 20 位箱号在窄屏上折行，不被右侧的「计划/实际」挤出屏幕 */
+.box-code-line {
+	flex: 1;
+	min-width: 0;
+	margin-left: 12rpx;
+	text-align: right;
+	word-break: break-all;
+	word-wrap: break-word;
 }
 
 .box-title {

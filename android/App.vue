@@ -60,5 +60,8 @@ page {
 
 .code {
 	font-family: Consolas, Menlo, monospace;
+	/* 20 位追溯码在窄屏上折行，不被裁切 */
+	word-break: break-all;
+	word-wrap: break-word;
 }
 </style>

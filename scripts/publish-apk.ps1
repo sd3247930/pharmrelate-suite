@@ -30,6 +30,10 @@ param(
     [string]$ApkPath,
     [string]$Tag,
     [string]$StagingDirectory,
+    # HBuilderX 工程里的 APK 产物目录。留空则从仓库内 android\ junction 反推
+    # （junction 指向真正的 HBuilderX 工程目录），也可以用环境变量
+    # PHARMRELATE_HBUILDER_APK_DIR 覆盖。源码里不再写死任何本机绝对路径。
+    [string]$HbuilderApkDir,
     [switch]$ValidateOnly,
     [switch]$SkipPush
 )
@@ -46,7 +50,13 @@ $fixedAssetName = 'PharmRelate-Multi-Capture.apk'
 $expectedPackage = 'com.pharmrelate.multi.capture'
 $expectedLabel = '籽关通'
 $downloadUrl = "https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/$fixedAssetName"
-$hbuilderApkDir = '<ANDROID_PROJECT_DIR>\unpackage\release\apk'
+$hbuilderApkDir = if ($HbuilderApkDir) {
+    $HbuilderApkDir
+} elseif ($env:PHARMRELATE_HBUILDER_APK_DIR) {
+    $env:PHARMRELATE_HBUILDER_APK_DIR
+} else {
+    Join-Path $androidDir 'unpackage\release\apk'
+}
 
 if (-not $StagingDirectory) {
     $StagingDirectory = Join-Path $root 'private\构建产物'
@@ -107,7 +117,13 @@ Write-Host ("大小：{0:N0} 字节（{1:N1} MB）" -f $apkItem.Length, ($apkIte
 
 # ---------- 3. 校验包名 / 应用名 / 启动图标 / 签名 ----------
 Write-Step '校验 APK（包名 / 应用名 / 启动图标 / 签名）'
-$buildTools = Get-ChildItem '<ANDROID_SDK>\build-tools' -Directory -ErrorAction SilentlyContinue |
+# build-tools 目录从环境推：优先 ANDROID_SDK_BUILD_TOOLS，其次 <LOCALAPPDATA>\Android\Sdk\build-tools
+$buildToolsRoot = if ($env:ANDROID_SDK_BUILD_TOOLS) {
+    $env:ANDROID_SDK_BUILD_TOOLS
+} else {
+    Join-Path $env:LOCALAPPDATA 'Android\Sdk\build-tools'
+}
+$buildTools = Get-ChildItem $buildToolsRoot -Directory -ErrorAction SilentlyContinue |
     Sort-Object Name -Descending | Select-Object -First 1
 if ($buildTools) {
     $aapt2 = Join-Path $buildTools.FullName 'aapt2.exe'

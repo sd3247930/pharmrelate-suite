@@ -170,7 +170,7 @@ class ExportGateAndRecordsTests(TempDatabaseTestCase):
     def test_golden_sha_matches_the_frozen_baseline(self) -> None:
         self.assertEqual(
             golden.sha256_of(golden.read_bytes("1箱3罐.xml")),
-            "560b9d34b1bb608fb265df6c536fdfbd9a5ce9307cff04b33fb8cfd749164e11",
+            "43c19388b2280fd2aba7bbdeac85a1fa27aa69e464f0266d9718cfdcadc8a464",
         )
 
     def test_html_contains_the_same_xml_text(self) -> None:
