@@ -41,6 +41,12 @@ Thumbs.db
 backend/var/
 backend/exports/
 
+# 签名证书与口令（绝不入库；指纹记录在 docs/72）
+private/签名证书/
+
+# APK 发布暂存（二进制不入库，Release 才是分发口径）
+private/构建产物/
+
 # 打包态冒烟的失败现场（截图与日志）
 desktop/artifacts/
 

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f7a8c">
+<meta name="description" content="籽关通（PharmRelate Multi）手机采集端安装页：箱 → 罐 → 粒子 三级包装关联采集，扫码 / 拍照 / 手输三通道，离线可用，本机生成 XML。点右上角「📲 安装」下载 APK。">
+<!-- 页签图标：内联 SVG，不额外增加文件，离线与 file:// 双击也能显示 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230f7a8c'/%3E%3Cpath d='M20 45V19h10c7 0 11 3.6 11 9.4 0 4.6-2.6 7.7-7 8.9L41 45h-6.6l-5.4-10h-3v10z' fill='%23fff'/%3E%3Ccircle cx='24' cy='24' r='3' fill='%23ffc22e'/%3E%3C/svg%3E">
+<!-- PWA：可添加到手机主屏幕；standalone 时脚本会自动隐藏「📲 安装」入口 -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="籽关通">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- 社交分享预览（微信 / QQ 内分享时不至于只有一行灰字） -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="籽关通 (PharmRelate Multi)">
+<meta property="og:title" content="籽关通（PharmRelate Multi）手机采集端 · 安装">
+<meta property="og:description" content="箱 → 罐 → 粒子 三级包装关联采集。扫码 / 拍照 / 手输三通道，离线可用，本机生成 XML。点右上角「📲 安装」下载 APK。">
+<meta property="og:image" content="https://sd3247930.github.io/PharmRelate-Multi/icons/og-cover.png">
+<meta property="og:url" content="https://sd3247930.github.io/PharmRelate-Multi/">
+<meta name="twitter:card" content="summary_large_image">
+<title>籽关通（PharmRelate Multi）手机采集端 · 安装</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- 顶栏：「📲 安装」是全页唯一安装入口；独立窗口（PWA / APK 内）或 file:// 打开时由脚本隐藏 -->
+<header class="app-bar">
+  <div class="app-bar-title">
+    <span class="app-bar-name">籽关通</span>
+    <span class="app-bar-sub">手机采集端</span>
+  </div>
+  <button class="app-bar-install" id="installBtn" type="button"
+          aria-label="安装应用" aria-expanded="false" aria-controls="installPanel">📲<span class="install-btn-text"> 安装</span></button>
+</header>
+
+<main class="page">
+
+  <section class="card hero">
+    <h1>籽关通（PharmRelate Multi）手机采集端</h1>
+    <p class="hero-sub">箱 → 罐 → 粒子 三级包装关联采集 · 离线可用 · 本机生成 XML</p>
+    <p class="hero-note">
+      这个页面只负责<strong>安装</strong>。扫码采集、核对、导出都在手机里的 App 内完成，
+      浏览器页面本身不提供采集功能。
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>三步上手</h2>
+    <ol class="steps">
+      <li><span class="step-no">1</span><div><strong>点右上角「📲 安装」</strong><br>底部会弹出「📥 下载应用」面板。</div></li>
+      <li><span class="step-no">2</span><div><strong>点「📥 下载应用（APK）」</strong><br>浏览器直接下载安装包，不会跳到 GitHub 页面。</div></li>
+      <li><span class="step-no">3</span><div><strong>装好后从桌面图标打开</strong><br>没有地址栏，断网（飞行模式）也能采集。</div></li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>手机端能做什么</h2>
+    <ul class="feature">
+      <li>箱号 / 罐号 / 粒子码三条采集通道：<strong>扫码</strong>（条码）、<strong>拍照识别</strong>（看照片手输）、<strong>手动输入</strong></li>
+      <li>多箱包装结构：1~5 箱，每箱 1~5 罐，每罐最多 2500 粒，单批上限 12500</li>
+      <li>分层校验与查重：箱号全批唯一、罐号本箱唯一、粒子码全批唯一</li>
+      <li>本机生成 XML 并可导出 HTML，与主控机逐字节同源</li>
+      <li>离线可用：连不上主控机照样采集，事后在本机核对</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>先看清这三件事</h2>
+    <ul class="feature warn">
+      <li><strong>数据在手机上。</strong>换机、卸载、清数据前，请先在 App 的「状态 / 导出」里把数据导出保存。</li>
+      <li><strong>要开两个权限。</strong>摄像头（扫码 / 拍照）与存储（导出 HTML 文件）；被拒后可在系统设置里重新打开。</li>
+      <li><strong>版本可自查。</strong>安装面板里给出文件大小与 SHA256，可与你下载到的文件核对。</li>
+    </ul>
+  </section>
+
+  <footer class="foot">
+    <p>本页版本信息：<span id="footVersion">—</span></p>
+    <p>
+      <a href="https://github.com/sd3247930/PharmRelate-Multi" rel="noreferrer">项目仓库</a>
+      ·
+      <a href="https://github.com/sd3247930/PharmRelate-Multi/tree/main/docs" rel="noreferrer">使用文档</a>
+      ·
+      <a href="https://github.com/sd3247930/PharmRelate-Multi/releases" rel="noreferrer">历史版本</a>
+    </p>
+  </footer>
+
+</main>
+
+<!-- 底部面板「📥 下载应用」：默认隐藏，只有点顶栏「📲 安装」（或 ?install=1 深链）才弹出 -->
+<div class="sheet-backdrop" id="installBackdrop" hidden></div>
+
+<section class="sheet" id="installPanel" role="dialog" aria-modal="true" aria-labelledby="installPanelTitle" hidden>
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <h2 id="installPanelTitle">📥 下载应用</h2>
+
+  <p class="sheet-meta">
+    版本 <strong id="apkVersion">—</strong>
+    · <span id="apkSize">—</span>
+    · 更新于 <span id="apkDate">—</span>
+  </p>
+  <p class="sheet-pending" id="apkPending" hidden>
+    安装包尚未发布：信息加载完成后这里会显示版本与校验值。
+  </p>
+
+  <!-- 主按钮：固定资产名直链。GitHub 资产以 attachment 下发，浏览器直接落盘，不会跳到 GitHub 页面。
+       href / download 在 HTML 里写死，即使 JS 或 apk.json 加载失败也照样能下载。 -->
+  <a class="sheet-download" id="apkDownload" download="PharmRelate-Multi-Capture.apk" rel="noreferrer"
+     href="https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/PharmRelate-Multi-Capture.apk">📥 下载应用（APK）</a>
+
+  <p class="sheet-sha">SHA256：<code id="apkSha">—</code></p>
+  <p class="sheet-pkg">包名 <code id="apkPackage">—</code></p>
+
+  <details class="sheet-faq">
+    <summary>为什么要装 APK（浏览器里直接用不行吗）</summary>
+    <p>
+      浏览器里只能用键盘手输，<strong>调不起摄像头扫码</strong>，导出文件也会被浏览器限制。
+      装上 APK 之后：桌面有独立图标、打开没有地址栏、断网可用、扫码与导出都走本机，
+      已经装成独立应用时，本页不会再显示「📲 安装」按钮。
+    </p>
+  </details>
+
+  <details class="sheet-faq">
+    <summary>安装被手机拦截 / 点了没反应怎么办</summary>
+    <p>
+      <strong>被 MagicOS、MIUI、ColorOS 等拦截：</strong>按提示允许「安装未知应用」，再选「继续安装」。
+    </p>
+    <p>
+      <strong>在微信 / QQ / 钉钉里点下载没反应：</strong>点右上角「···」→「在浏览器打开」，
+      再点本页右上角「📲 安装」重试。UC、夸克等浏览器若弹「不支持下载」，同样切到系统浏览器。
+    </p>
+    <p>
+      <strong>实在点不动：</strong>长按下面这条地址复制，粘到系统浏览器地址栏打开。
+    </p>
+    <p class="sheet-raw">
+      <input id="apkRawUrl" type="text" readonly aria-label="安装包直链"
+             value="https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/PharmRelate-Multi-Capture.apk">
+    </p>
+    <p class="sheet-raw-actions">
+      <button type="button" class="mini-btn" id="apkCopyBtn">复制直链</button>
+      <span class="mini-note" id="apkCopyNote" role="status" aria-live="polite"></span>
+    </p>
+  </details>
+
+  <details class="sheet-faq">
+    <summary>换手机 / 重装前先导出进度</summary>
+    <p>
+      采集数据存在手机本机，不在云端。换机或重装前，先在 App 里导出
+      （状态页「导出为 .html」，或把批次数据导给主控机），装好新机后再导入，
+      避免数据随卸载一起消失。
+    </p>
+    <p>
+      <strong>签名说明：</strong>本安装包使用固定签名证书。若将来换了证书，
+      系统会要求先卸载旧版本再安装（卸载会清掉本机数据，请务必先导出）。
+    </p>
+  </details>
+
+  <button class="sheet-close" id="installClose" type="button">关闭</button>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>

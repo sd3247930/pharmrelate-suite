@@ -94,6 +94,9 @@ Invoke-Step -Name 'WebSocket 通道本地自测（ws + wss）' -WorkingDirectory
 Invoke-Step -Name 'Android（uni-app）静态检查' -WorkingDirectory $root `
     -Command @('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts\check-uniapp.ps1')
 
+Invoke-Step -Name '手机端分发站静态检查（web/ + Pages 工作流 + 固定资产名直链）' -WorkingDirectory $root `
+    -Command @('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts\verify-install-entry.ps1', '-SkipOnline')
+
 Invoke-Step -Name '前端单元测试（路由 + 条码规则）' -WorkingDirectory $frontendDir `
     -Command @('npm', 'test')
 

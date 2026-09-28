@@ -1,0 +1,32 @@
+{
+  "name": "籽关通（PharmRelate Multi）手机采集端",
+  "short_name": "籽关通",
+  "description": "箱 → 罐 → 粒子 三级包装关联采集：扫码 / 拍照 / 手输三通道，离线可用，本机生成 XML。本页负责安装 APK。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f6f7",
+  "theme_color": "#0f7a8c",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

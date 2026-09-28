@@ -2,12 +2,21 @@
 
 跨平台三级包装（箱 → 罐 → 粒子）关联管理系统。
 
+<p align="right">
+  <a href="https://sd3247930.github.io/PharmRelate-Multi/?install=1"><strong>📲 安装</strong></a>
+</p>
+
+Android（手机）直接打开 <https://sd3247930.github.io/PharmRelate-Multi/>，
+点右上角 **「📲 安装」** 就能下载独立 APK：桌面有独立图标、打开无地址栏、断网可用。
+上面右上角的「📲 安装」直达安装面板。
+
 **当前状态（2026-09-28）**
 
 | 端 | 状态 |
 | --- | --- |
 | Windows 主控机 | 一期单机闭环**已完成**：基准冻结 → 工程骨架/设计系统 → 数据持久化与批次状态机 → 扫码采集 → 预览与导出 → 验收 |
 | Android 采集端（uni-app） | **v1.3.5 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；箱/罐自然数校验；本机 XML 生成与 HTML 导出；识别契约层 + 人工确认降级 |
+| 手机网页版 / APK 分发 | **已上线**：GitHub Pages 分发站 + 固定资产名 APK 直链（首次发布 `v1.3.5`），一条命令发版；见 [docs/72-网页版与APK分发方案.md](docs/72-网页版与APK分发方案.md) |
 
 一条命令跑完全部检查（后端 + 前端 + 桌面壳 + Android 静态检查）：
 
@@ -56,6 +65,8 @@ desktop/                   桌面壳（Electron 主壳 + Tauri 备选实现）
 scripts/                   一键开发与一键检查脚本
 docs/                      决策记录与阶段记录
 private/                   需求文档与原始样例（只读输入区）
+web/                       手机端分发站（Pages 发布的目录：安装入口 + 直下 APK）
+.github/workflows/         Pages 发布工作流（把 web/ 原样发上去）
 android/                   Android 采集端（uni-app / HBuilderX）
   pages/                   扫码采集 · 任务状态 · 连接设置（三 Tab）
   services/localBatch.js   ★ 本地数据层（多箱结构 / 状态机 / 槽位 / 撤销 / 核对 / 老数据迁移）

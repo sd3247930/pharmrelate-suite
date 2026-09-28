@@ -1,0 +1,59 @@
+name: Deploy mobile web station
+
+# 手机端分发站：把仓库里的 web/ 目录原样发布到 GitHub Pages。
+# 站点源留在 main 树里（可 review、可回溯），不使用孤儿分支。
+# 发布地址：https://sd3247930.github.io/PharmRelate-Multi/
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个 Pages 部署；已在跑的部署不打断
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # 发布前自检：主按钮的固定资产名直链与 apk.json 必须一致，
+      # 否则「升版不改页面」这条机制会在无人察觉时断掉。
+      - name: Verify install entry before publishing
+        run: |
+          set -e
+          FIXED_URL="https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/PharmRelate-Multi-Capture.apk"
+          test -f web/index.html
+          test -f web/apk.json
+          grep -q 'id="installBtn"' web/index.html || { echo "::error::缺少「📲 安装」入口"; exit 1; }
+          grep -q 'role="dialog"' web/index.html || { echo "::error::缺少「📥 下载应用」面板"; exit 1; }
+          grep -q "$FIXED_URL" web/index.html || { echo "::error::主按钮直链不是固定资产名直链"; exit 1; }
+          grep -q "$FIXED_URL" web/apk.json || { echo "::error::apk.json 的直链与页面不一致"; exit 1; }
+          python3 -c "import json;json.load(open('web/apk.json',encoding='utf-8'));json.load(open('web/manifest.json',encoding='utf-8'))"
+          echo "✅ 安装入口、面板与固定资产名直链自检通过"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload web/ as Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
