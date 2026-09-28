@@ -155,6 +155,17 @@ if ($SkipOnline) {
         Write-Host '        提示：Pages 首次部署要等 Actions 跑完（约 1~2 分钟）；刚推送完就查会 404。' -ForegroundColor Yellow
     }
 
+    # 站点资源逐个确认：PWA manifest / 面板数据 / 图标 少一个，都会让「装到主屏」或分享预览静默失效
+    $siteRoot = $SiteUrl.TrimEnd('/')
+    foreach ($asset in @('manifest.json', 'apk.json', 'icons/icon-192.png', 'icons/icon-512-maskable.png', 'icons/og-cover.png')) {
+        try {
+            $res = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$siteRoot/$asset" -TimeoutSec 30
+            Report ($res.StatusCode -eq 200) "Pages 资源可访问：/$asset"
+        } catch {
+            Report $false "Pages 资源可访问：/$asset" $_.Exception.Message
+        }
+    }
+
     try {
         $head = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $fixedUrl -MaximumRedirection 6 -TimeoutSec 60
         $disposition = [string]$head.Headers['Content-Disposition']

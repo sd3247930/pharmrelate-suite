@@ -54,6 +54,29 @@ if (-not $StagingDirectory) {
 function Write-Step($text) { Write-Host "`n==== $text ====" -ForegroundColor Cyan }
 function Fail($text) { Write-Host "[失败] $text" -ForegroundColor Red; exit 1 }
 
+# 原生命令（gh / git / aapt2 / apksigner）统一走这个包装。
+# 原因：Windows PowerShell 5.1 下，原生命令往 stderr 写内容会变成 NativeCommandError，
+# 而 `gh` 打进度、`git` 提示「nothing to commit」都会走 stderr —— 那是正常行为，不该中断脚本。
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [switch]$Capture
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Capture) {
+            $output = & $Exe @Arguments 2>&1 | Out-String
+            return [pscustomobject]@{ Code = $LASTEXITCODE; Output = $output }
+        }
+        & $Exe @Arguments
+        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = '' }
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 # ---------- 1. 读 manifest 拿版本号 ----------
 Write-Step '读取 Android 版本号'
 if (-not (Test-Path -LiteralPath $manifestPath)) { Fail "找不到 $manifestPath" }
@@ -88,7 +111,7 @@ $buildTools = Get-ChildItem '<ANDROID_SDK>\build-tools' -Directory -ErrorAction 
 if ($buildTools) {
     $aapt2 = Join-Path $buildTools.FullName 'aapt2.exe'
     if (Test-Path -LiteralPath $aapt2) {
-        $badging = & $aapt2 dump badging $ApkPath 2>&1 | Out-String
+        $badging = (Invoke-Native -Exe $aapt2 -Arguments @('dump', 'badging', $ApkPath) -Capture).Output
         if ($badging -notmatch [regex]::Escape("name='$expectedPackage'")) {
             Fail "包名不是 $expectedPackage（aapt2 输出：$(($badging -split "`n")[0])）"
         }
@@ -102,7 +125,7 @@ if ($buildTools) {
     }
     $apksigner = Join-Path $buildTools.FullName 'apksigner.bat'
     if (Test-Path -LiteralPath $apksigner) {
-        $signInfo = & $apksigner verify --print-certs $ApkPath 2>&1 | Out-String
+        $signInfo = (Invoke-Native -Exe $apksigner -Arguments @('verify', '--print-certs', $ApkPath) -Capture).Output
         $sha = ([regex]::Match($signInfo, 'SHA-256 digest:\s*([0-9a-fA-F]+)')).Groups[1].Value
         if ($sha) {
             Write-Host "签名 SHA-256：$sha"
@@ -142,12 +165,13 @@ Write-Step "发布 GitHub Release：$Tag"
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh) { Fail '找不到 gh CLI（https://cli.github.com/），或改成在网页上手动上传资产' }
 
-& gh release view $Tag --repo sd3247930/PharmRelate-Multi *> $null
-$releaseExists = ($LASTEXITCODE -eq 0)
+$releaseExists = (Invoke-Native -Exe $gh -Arguments @(
+        'release', 'view', $Tag, '--repo', 'sd3247930/PharmRelate-Multi') -Capture).Code -eq 0
 
 if ($releaseExists) {
     Write-Host "Release $Tag 已存在，改为覆盖上传资产（--clobber）"
-    & gh release upload $Tag $stagedApk $shaFile --repo sd3247930/PharmRelate-Multi --clobber
+    $result = Invoke-Native -Exe $gh -Arguments @(
+        'release', 'upload', $Tag, $stagedApk, $shaFile, '--repo', 'sd3247930/PharmRelate-Multi', '--clobber')
 } else {
     $notes = @"
 手机采集端（uni-app）Android 安装包。
@@ -160,10 +184,12 @@ if ($releaseExists) {
 固定下载直链（网页「📲 安装 → 📥 下载应用」用的就是它）：
 $downloadUrl
 "@
-    & gh release create $Tag $stagedApk $shaFile --repo sd3247930/PharmRelate-Multi `
-        --title "手机采集端 $versionName" --notes $notes
+    $result = Invoke-Native -Exe $gh -Arguments @(
+        'release', 'create', $Tag, $stagedApk, $shaFile,
+        '--repo', 'sd3247930/PharmRelate-Multi',
+        '--title', "手机采集端 $versionName", '--notes', $notes)
 }
-if ($LASTEXITCODE -ne 0) { Fail "gh release 执行失败（退出码 $LASTEXITCODE）" }
+if ($result.Code -ne 0) { Fail "gh release 执行失败（退出码 $($result.Code)）" }
 
 # ---------- 6. 回写 web/apk.json ----------
 Write-Step '回写 web/apk.json'
@@ -188,12 +214,13 @@ Write-Host "已更新：$apkJsonPath"
 Write-Step '提交 web/apk.json'
 Push-Location -LiteralPath $root
 try {
-    & git add -- 'web/apk.json'
-    & git commit -m "release: 手机采集端 $versionName —— 直链与网页面板信息同步"
-    if ($LASTEXITCODE -ne 0) { Write-Host '[提示] 没有需要提交的改动（apk.json 内容未变）' -ForegroundColor Yellow }
+    $null = Invoke-Native -Exe 'git' -Arguments @('add', '--', 'web/apk.json')
+    $commit = Invoke-Native -Exe 'git' -Arguments @(
+        'commit', '-m', "release: 手机采集端 $versionName —— 直链与网页面板信息同步")
+    if ($commit.Code -ne 0) { Write-Host '[提示] 没有需要提交的改动（apk.json 内容未变）' -ForegroundColor Yellow }
     if (-not $SkipPush) {
-        & git push origin HEAD
-        if ($LASTEXITCODE -ne 0) { Fail 'git push 失败' }
+        $push = Invoke-Native -Exe 'git' -Arguments @('push', 'origin', 'HEAD')
+        if ($push.Code -ne 0) { Fail 'git push 失败' }
     } else {
         Write-Host '[跳过] -SkipPush：未推送（Pages 上仍是旧版本信息）' -ForegroundColor Yellow
     }
