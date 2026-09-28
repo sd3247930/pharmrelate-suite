@@ -41,7 +41,7 @@ Thumbs.db
 backend/var/
 backend/exports/
 
-# 签名证书与口令（绝不入库；指纹记录在 docs/72）
+# 签名证书与口令（绝不入库；指纹记录在内部资料里）
 private/签名证书/
 
 # APK 发布暂存（二进制不入库，Release 才是分发口径）
@@ -52,6 +52,12 @@ desktop/artifacts/
 
 # 测试证据产物（截图/报告/临时导出）—— 体积大且可重跑生成
 private/测试输出/
+
+# 内部资料：需求文档、现场照片、决策记录、阶段记录（2026-09-28 移出公开仓库）
+# 用 git rm -r --cached docs private 从索引移除，本地文件保留；
+# 加这条忽略规则是防止以后又把它们 commit 回去。
+docs/
+private/
 
 # 注意：以下路径必须入库，禁止加入忽略规则
 #   backend/tests/golden/     字节级黄金基准

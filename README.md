@@ -16,7 +16,7 @@ Android（手机）直接打开 <https://sd3247930.github.io/PharmRelate-Multi/>
 | --- | --- |
 | Windows 主控机 | 一期单机闭环**已完成**：基准冻结 → 工程骨架/设计系统 → 数据持久化与批次状态机 → 扫码采集 → 预览与导出 → 验收 |
 | Android 采集端（uni-app） | **v1.3.6 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；箱/罐自然数校验；本机 XML 生成与 HTML 导出；生产包名与圆形 Logo 固化；识别契约层 + 人工确认降级 |
-| 手机网页版 / APK 分发 | **已上线**：GitHub Pages 分发站 + 固定资产名 APK 直链（首次发布 `v1.3.5`），一条命令发版；见 [docs/72-网页版与APK分发方案.md](docs/72-网页版与APK分发方案.md) |
+| 手机网页版 / APK 分发 | **已上线**：GitHub Pages 分发站 + 固定资产名 APK 直链（首次发布 `v1.3.5`），一条命令发版（`scripts\publish-apk.ps1`） |
 
 一条命令跑完全部检查（后端 + 前端 + 桌面壳 + Android 静态检查）：
 
@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File scripts\check.ps1
 一期虽不实现，但必须预留：`SyncMeta` 字段、`oplog` 表结构、设备/用户 ID 占位、
 批次状态机中的 `exported / locked / archived / void` 状态。
 
-完整决策与理由见 [docs/00-决策记录.md](docs/00-决策记录.md)。
+完整决策与理由见内部决策记录（`docs/` 已于 2026-09-28 移出公开仓库，不再随代码分发）。
 
 ## 目录结构
 
@@ -241,5 +241,5 @@ node tests\numberRecognizer.test.mjs # 识别契约层 59 项
 一期 Windows 单机闭环与 Android 采集端均已完成。二期方向：多端同步（SyncMeta / oplog 已预留）、
 粒子多码拍照识别、离线补发与多端互斥锁、账号与权限。
 
-详细进展见 [docs/01-阶段记录.md](docs/01-阶段记录.md)，
+内部阶段记录（`docs/`，已于 2026-09-28 移出公开仓库）不再随代码分发；
 Android 端设计说明见 [android/README.md](android/README.md)。
