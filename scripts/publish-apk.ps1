@@ -5,7 +5,7 @@
 .DESCRIPTION
     一条命令完成「发版」这件事：
       1. 找到 HBuilderX 最新的 Android 打包产物（或用 -ApkPath 指定）；
-      2. 校验包名 / 版本号 / 签名与私有证书一致；
+      2. 校验包名 / 版本号 / 六档启动图标 / 签名与私有证书一致；
       3. 按固定资产名 PharmRelate-Multi-Capture.apk 暂存，并生成 .sha256；
       4. 创建（或覆盖）GitHub Release，上传两个资产；
       5. 回写 web/apk.json（版本 / 大小 / SHA256 / 日期），提交并推送。
@@ -18,8 +18,8 @@
     # 常规发版（自动取最新打包产物，tag = v<manifest.versionName>）
     powershell -ExecutionPolicy Bypass -File scripts\publish-apk.ps1
 
-    # 指定产物 / 不推送（先干跑一遍看输出）
-    powershell -ExecutionPolicy Bypass -File scripts\publish-apk.ps1 -ApkPath "D:\...\__UNI__DA0B962__20260928090958.apk" -SkipPush
+    # 指定产物，只做完整校验，不创建或修改 Release
+    powershell -ExecutionPolicy Bypass -File scripts\publish-apk.ps1 -ApkPath "D:\...\__UNI__DA0B962__20260928090958.apk" -ValidateOnly
 
 .NOTES
     - keystore 与口令只在 private\签名证书\ 本地保留，不入库；
@@ -30,6 +30,7 @@ param(
     [string]$ApkPath,
     [string]$Tag,
     [string]$StagingDirectory,
+    [switch]$ValidateOnly,
     [switch]$SkipPush
 )
 
@@ -104,8 +105,8 @@ $apkItem = Get-Item -LiteralPath $ApkPath
 Write-Host "APK：$($apkItem.FullName)"
 Write-Host ("大小：{0:N0} 字节（{1:N1} MB）" -f $apkItem.Length, ($apkItem.Length / 1MB))
 
-# ---------- 3. 校验包名 / 应用名 / 签名 ----------
-Write-Step '校验 APK（包名 / 应用名 / 签名）'
+# ---------- 3. 校验包名 / 应用名 / 启动图标 / 签名 ----------
+Write-Step '校验 APK（包名 / 应用名 / 启动图标 / 签名）'
 $buildTools = Get-ChildItem '<ANDROID_SDK>\build-tools' -Directory -ErrorAction SilentlyContinue |
     Sort-Object Name -Descending | Select-Object -First 1
 if ($buildTools) {
@@ -123,6 +124,46 @@ if ($buildTools) {
         }
         Write-Host "OK 包名 $expectedPackage · 应用名 $expectedLabel · versionName $versionName"
     }
+
+    # HBuilderX 未读取 manifest 图标时仍会产出可安装 APK，但会悄悄退回绿色 H 默认图标。
+    # 发布前逐档比较 APK 内 launcher icon 与仓库母版产物，杜绝错误资源上线。
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $iconSpecs = [ordered]@{
+        'ldpi'    = 'app-icon-round-ldpi-48.png'
+        'mdpi'    = 'app-icon-round-mdpi-48.png'
+        'hdpi'    = 'app-icon-round-hdpi-72.png'
+        'xhdpi'   = 'app-icon-round-xhdpi-96.png'
+        'xxhdpi'  = 'app-icon-round-xxhdpi-144.png'
+        'xxxhdpi' = 'app-icon-round-xxxhdpi-192.png'
+    }
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ApkPath)
+    try {
+        foreach ($density in $iconSpecs.Keys) {
+            $entryName = "res/drawable-$density/icon.png"
+            $entry = $archive.GetEntry($entryName)
+            if (-not $entry) { Fail "APK 缺少启动图标：$entryName（可能回退为 HBuilder 默认图标）" }
+
+            $expectedPath = Join-Path $androidDir ("static\icons\" + $iconSpecs[$density])
+            if (-not (Test-Path -LiteralPath $expectedPath)) { Fail "仓库缺少预期图标：$expectedPath" }
+            $expectedHash = (Get-FileHash -LiteralPath $expectedPath -Algorithm SHA256).Hash.ToLower()
+
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            $stream = $entry.Open()
+            try {
+                $actualHash = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLower()
+            } finally {
+                $stream.Dispose()
+                $sha256.Dispose()
+            }
+            if ($actualHash -ne $expectedHash) {
+                Fail "APK 启动图标与仓库不一致：$entryName（实际 $actualHash / 预期 $expectedHash）"
+            }
+            Write-Host "OK 启动图标 $density：$entryName"
+        }
+    } finally {
+        $archive.Dispose()
+    }
+
     $apksigner = Join-Path $buildTools.FullName 'apksigner.bat'
     if (Test-Path -LiteralPath $apksigner) {
         $signInfo = (Invoke-Native -Exe $apksigner -Arguments @('verify', '--print-certs', $ApkPath) -Capture).Output
@@ -146,6 +187,11 @@ if ($buildTools) {
     }
 } else {
     Write-Host '[提示] 未找到 Android build-tools，跳过包名与签名校验' -ForegroundColor Yellow
+}
+
+if ($ValidateOnly) {
+    Write-Host "`nAPK 发布前校验通过；-ValidateOnly 未创建或修改 GitHub Release。" -ForegroundColor Green
+    exit 0
 }
 
 # ---------- 4. 暂存为固定资产名 + 生成 sha256 ----------

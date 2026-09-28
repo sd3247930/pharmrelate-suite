@@ -68,6 +68,7 @@ foreach ($permission in @('INTERNET', 'CAMERA', 'ACCESS_WIFI_STATE', 'CHANGE_WIF
     Report ($manifest -match $permission) "Android 权限已声明：$permission"
 }
 Report ($manifest -match '"Barcode"') '已启用 Barcode 模块（uni.scanCode 需要）'
+Report ($manifest -match '"packagename"\s*:\s*"com\.pharmrelate\.multi\.capture"') '生产包名固定为 com.pharmrelate.multi.capture'
 
 # ---- Android 启动图标 ----
 $iconSpecs = @{
