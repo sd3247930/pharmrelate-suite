@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""从桌面端品牌图标生成手机分发站（web/icons）需要的 PNG 资源。
+"""从 Android 圆形 Logo 母版生成手机分发站（web/icons）需要的 PNG 资源。
 
 用法（在仓库根目录执行）：
 
@@ -7,13 +7,13 @@
 
 产物：
 
-    web/icons/icon-192.png           PWA 图标（任意用途，保留透明）
-    web/icons/icon-512.png           PWA 图标（任意用途，保留透明）
-    web/icons/icon-512-maskable.png  PWA 蒙版图标（铺满品牌色底，留安全边距）
-    web/icons/og-cover.png           微信 / QQ 分享预览图（1200×630）
+    web/icons/app-logo-round-192-v2.png           PWA 图标（任意用途，保留透明）
+    web/icons/app-logo-round-512-v2.png           PWA 图标（任意用途，保留透明）
+    web/icons/app-logo-round-maskable-512-v2.png  PWA 蒙版图标（铺满品牌色底）
+    web/icons/og-cover-v2.png                     微信 / QQ 分享预览图（1200×630）
 
-图标源与 Windows 安装包同源（desktop/src-tauri/icons/icon.png），
-保证手机端与桌面端看起来是同一个产品。
+图标源与 HBuilderX 云打包 APK 同源，确保安装页、PWA 与 Android 应用
+展示同一套圆形品牌标识。文件名包含版本号，用于绕过浏览器与主屏图标缓存。
 """
 
 from __future__ import annotations
@@ -28,12 +28,13 @@ except ImportError:  # pragma: no cover - 环境缺 PIL 时给出可操作提示
     raise SystemExit(1)
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "desktop" / "src-tauri" / "icons" / "icon.png"
+SOURCE_MASTER = ROOT / "android" / "static" / "icons" / "app-icon-round-master-1024.png"
+SOURCE_FOREGROUND = ROOT / "android" / "static" / "icons" / "app-icon-round-foreground-1024.png"
 OUT_DIR = ROOT / "web" / "icons"
 
-BRAND = (15, 122, 140, 255)      # #0f7a8c，与 web/styles.css 的 --primary 同源
-BRAND_DARK = (11, 98, 116, 255)  # #0b6274
-ACCENT = (255, 194, 46, 255)     # #ffc22e
+BRAND = (14, 110, 122, 255)      # #0e6e7a，与 Android uni.scss 同源
+BRAND_DARK = (10, 85, 96, 255)   # #0a5560
+ACCENT = (232, 163, 61, 255)     # #e8a33d
 
 # 中文字体候选（Windows 自带；Linux / macOS 上按顺序回退）
 FONT_CANDIDATES = [
@@ -53,27 +54,27 @@ def load_font(size: int) -> "ImageFont.FreeTypeFont":
 
 
 def main() -> int:
-    if not SOURCE.exists():
-        raise SystemExit(f"找不到图标源：{SOURCE}")
+    for source_path in (SOURCE_MASTER, SOURCE_FOREGROUND):
+        if not source_path.exists():
+            raise SystemExit(f"找不到图标源：{source_path}")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    source = Image.open(SOURCE).convert("RGBA")
+    source = Image.open(SOURCE_MASTER).convert("RGBA")
+    foreground = Image.open(SOURCE_FOREGROUND).convert("RGBA")
 
-    # 1) 普通图标：等比缩放，保留透明通道
+    # 1) 普通图标：保留母版的圆外透明区域，适合 favicon / apple-touch / PWA any。
     for size in (192, 512):
         icon = source.resize((size, size), Image.LANCZOS)
-        icon.save(OUT_DIR / f"icon-{size}.png", "PNG", optimize=True)
-        print(f"已生成 web/icons/icon-{size}.png")
+        target = OUT_DIR / f"app-logo-round-{size}-v2.png"
+        icon.save(target, "PNG", optimize=True)
+        print(f"已生成 {target.relative_to(ROOT)}")
 
-    # 2) 蒙版图标：铺满品牌色底 + 78% 居中图形，被圆形 / 方形裁切时不掉内容
+    # 2) maskable 必须是全出血底色；前景已经限制在 Android/PWA 安全区内。
     maskable = Image.new("RGBA", (512, 512), BRAND)
-    inner = int(512 * 0.78)
-    maskable.alpha_composite(
-        source.resize((inner, inner), Image.LANCZOS),
-        ((512 - inner) // 2, (512 - inner) // 2),
-    )
-    maskable.save(OUT_DIR / "icon-512-maskable.png", "PNG", optimize=True)
-    print("已生成 web/icons/icon-512-maskable.png")
+    maskable.alpha_composite(foreground.resize((512, 512), Image.LANCZOS))
+    maskable_target = OUT_DIR / "app-logo-round-maskable-512-v2.png"
+    maskable.save(maskable_target, "PNG", optimize=True)
+    print(f"已生成 {maskable_target.relative_to(ROOT)}")
 
     # 3) 分享预览图 1200×630
     cover = Image.new("RGB", (1200, 630), BRAND)
@@ -92,9 +93,10 @@ def main() -> int:
     draw.text((430, 262), "PharmRelate Multi", font=sub_font, fill=(230, 245, 248))
     draw.text((430, 320), "手机采集端 · 扫码 / 拍照 / 手输", font=small_font, fill=(210, 236, 240))
     draw.text((430, 372), "箱 → 罐 → 粒子 · 离线可用", font=small_font, fill=(210, 236, 240))
-    draw.text((430, 460), "点右上角「📲 安装」下载 APK", font=sub_font, fill=ACCENT)
-    cover.save(OUT_DIR / "og-cover.png", "PNG", optimize=True)
-    print("已生成 web/icons/og-cover.png")
+    draw.text((430, 460), "点右上角「安装」下载 APK", font=sub_font, fill=ACCENT)
+    cover_target = OUT_DIR / "og-cover-v2.png"
+    cover.save(cover_target, "PNG", optimize=True)
+    print(f"已生成 {cover_target.relative_to(ROOT)}")
 
     return 0
 

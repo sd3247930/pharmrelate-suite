@@ -41,9 +41,33 @@ jobs:
           test -f web/apk.json
           grep -q 'id="installBtn"' web/index.html || { echo "::error::缺少「📲 安装」入口"; exit 1; }
           grep -q 'role="dialog"' web/index.html || { echo "::error::缺少「📥 下载应用」面板"; exit 1; }
+          grep -q 'class="app-bar-logo"' web/index.html || { echo "::error::页面顶栏缺少品牌 Logo"; exit 1; }
+          grep -q 'icons/app-logo-round-192-v2.png' web/index.html || { echo "::error::页面没有引用新版圆形 Logo"; exit 1; }
           grep -q "$FIXED_URL" web/index.html || { echo "::error::主按钮直链不是固定资产名直链"; exit 1; }
           grep -q "$FIXED_URL" web/apk.json || { echo "::error::apk.json 的直链与页面不一致"; exit 1; }
-          python3 -c "import json;json.load(open('web/apk.json',encoding='utf-8'));json.load(open('web/manifest.json',encoding='utf-8'))"
+          test -f web/icons/app-logo-round-192-v2.png
+          test -f web/icons/app-logo-round-512-v2.png
+          test -f web/icons/app-logo-round-maskable-512-v2.png
+          test -f web/icons/og-cover-v2.png
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          json.load(open('web/apk.json', encoding='utf-8'))
+          manifest = json.load(open('web/manifest.json', encoding='utf-8'))
+          expected = {
+              'icons/app-logo-round-192-v2.png',
+              'icons/app-logo-round-512-v2.png',
+              'icons/app-logo-round-maskable-512-v2.png',
+          }
+          sources = {item['src'] for item in manifest.get('icons', [])}
+          missing = expected - sources
+          if missing:
+              raise SystemExit(f"manifest 未引用新版图标：{sorted(missing)}")
+          for source in sources:
+              if not Path('web', source).is_file():
+                  raise SystemExit(f"manifest 图标不存在：{source}")
+          PY
           echo "✅ 安装入口、面板与固定资产名直链自检通过"
 
       - name: Configure Pages

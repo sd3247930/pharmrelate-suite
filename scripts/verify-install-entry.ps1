@@ -39,6 +39,12 @@ $pwaJsonPath = Join-Path $webDir 'manifest.json'
 
 $fixedAssetName = 'PharmRelate-Multi-Capture.apk'
 $fixedUrl = "https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/$fixedAssetName"
+$logoAssets = @(
+    'app-logo-round-192-v2.png',
+    'app-logo-round-512-v2.png',
+    'app-logo-round-maskable-512-v2.png',
+    'og-cover-v2.png'
+)
 
 $failures = [System.Collections.Generic.List[string]]::new()
 $checks = 0
@@ -76,6 +82,8 @@ if ($index) {
     Report ($index -match '导出') '面板含「先导出再迁移」说明'
     Report ($index -match 'og:title' -and $index -match 'og:image') '含 og:title / og:image 分享预览'
     Report ($index -match 'manifest.json') '引用 PWA manifest'
+    Report ($index -match 'class="app-bar-logo"') '顶栏显示圆形品牌 Logo'
+    Report ($index -match 'icons/app-logo-round-192-v2.png') '页面引用版本化圆形 Logo'
     # 主按钮不依赖 JS：href 必须写在 HTML 里，而不是只靠脚本注入
     Report ($index -match '<a[^>]+id="apkDownload"[^>]+href=') '主按钮的 href 写在 HTML 里（不依赖 JS）'
 }
@@ -97,7 +105,7 @@ if ($styles) {
     Report ($styles -match 'font-size:\s*16px') '正文 16px 起'
 }
 
-foreach ($icon in @('icon-192.png', 'icon-512.png', 'icon-512-maskable.png', 'og-cover.png')) {
+foreach ($icon in $logoAssets) {
     Report (Test-Path -LiteralPath (Join-Path $webDir ('icons\' + $icon))) "图标存在：icons/$icon"
 }
 
@@ -127,6 +135,10 @@ Report ($null -ne $pwaJson) 'web/manifest.json 是合法 JSON'
 if ($pwaJson) {
     Report ($pwaJson.display -eq 'standalone') 'PWA 以 standalone 方式启动（装到主屏后无地址栏）'
     Report (@($pwaJson.icons).Count -ge 3) 'PWA 至少声明 3 个图标（含 maskable）'
+    $pwaIconSources = @($pwaJson.icons | ForEach-Object { $_.src })
+    foreach ($icon in $logoAssets[0..2]) {
+        Report ($pwaIconSources -contains "icons/$icon") "PWA manifest 引用：icons/$icon"
+    }
 }
 
 $workflowPath = Join-Path $root '.github\workflows\pages.yml'
@@ -157,7 +169,8 @@ if ($SkipOnline) {
 
     # 站点资源逐个确认：PWA manifest / 面板数据 / 图标 少一个，都会让「装到主屏」或分享预览静默失效
     $siteRoot = $SiteUrl.TrimEnd('/')
-    foreach ($asset in @('manifest.json', 'apk.json', 'icons/icon-192.png', 'icons/icon-512-maskable.png', 'icons/og-cover.png')) {
+    $onlineAssets = @('manifest.json', 'apk.json') + @($logoAssets | ForEach-Object { "icons/$_" })
+    foreach ($asset in $onlineAssets) {
         try {
             $res = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$siteRoot/$asset" -TimeoutSec 30
             Report ($res.StatusCode -eq 200) "Pages 资源可访问：/$asset"

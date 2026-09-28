@@ -69,6 +69,33 @@ foreach ($permission in @('INTERNET', 'CAMERA', 'ACCESS_WIFI_STATE', 'CHANGE_WIF
 }
 Report ($manifest -match '"Barcode"') '已启用 Barcode 模块（uni.scanCode 需要）'
 
+# ---- Android 启动图标 ----
+$iconSpecs = @{
+    'static\icons\app-icon-round-ldpi-48.png' = 48
+    'static\icons\app-icon-round-mdpi-48.png' = 48
+    'static\icons\app-icon-round-hdpi-72.png' = 72
+    'static\icons\app-icon-round-xhdpi-96.png' = 96
+    'static\icons\app-icon-round-xxhdpi-144.png' = 144
+    'static\icons\app-icon-round-xxxhdpi-192.png' = 192
+}
+Add-Type -AssemblyName System.Drawing
+foreach ($entry in $iconSpecs.GetEnumerator()) {
+    $path = Join-Path $androidDir $entry.Key
+    $exists = Test-Path -LiteralPath $path
+    Report $exists "Android 图标存在：$($entry.Key)"
+    if (-not $exists) { continue }
+    $image = [System.Drawing.Image]::FromFile($path)
+    try {
+        $sizeOk = $image.Width -eq $entry.Value -and $image.Height -eq $entry.Value
+        Report $sizeOk "Android 图标尺寸：$($entry.Key)" "$($image.Width)x$($image.Height)"
+    }
+    finally {
+        $image.Dispose()
+    }
+    $manifestPath = $entry.Key.Replace('\', '/')
+    Report ($manifest -match [regex]::Escape($manifestPath)) "manifest 已引用：$manifestPath"
+}
+
 $pages = Get-Content -LiteralPath (Join-Path $androidDir 'pages.json') -Raw -Encoding UTF8
 foreach ($page in @('pages/scan/scan', 'pages/status/status', 'pages/settings/settings')) {
     Report ($pages -match [regex]::Escape($page)) "路由已注册：$page"
