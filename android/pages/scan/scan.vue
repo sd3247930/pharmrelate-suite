@@ -172,12 +172,14 @@
 			</view>
 			<view v-for="box in slotRows" :key="box.boxIndex" class="box-group">
 				<view class="row-between box-head">
-					<text class="box-title">箱 {{ box.boxIndex }}{{ box.virtual ? '（虚拟箱）' : '' }}</text>
 					<text class="hint code">{{ box.boxCode || '（未扫箱号）' }}</text>
+					<text class="box-title">箱 {{ box.boxIndex }}{{ box.virtual ? '（虚拟箱）' : '' }}</text>
 				</view>
 				<view v-for="row in box.cans" :key="row.canIndex" class="slot-row">
-					<text class="slot-can">罐 {{ row.canIndex }}</text>
-					<text class="slot-can-code code">{{ row.canCode || '（未扫罐号）' }}</text>
+					<view class="row-between can-head">
+						<text class="slot-can-code code">{{ row.canCode || '（未扫罐号）' }}</text>
+						<text class="slot-can">罐 {{ row.canIndex }}</text>
+					</view>
 					<view class="slot-grid">
 						<view
 							v-for="slot in row.slots"
@@ -1488,7 +1490,9 @@ export default {
 .slot-can {
 	font-size: 26rpx;
 	font-weight: 600;
-	margin-right: 12rpx;
+	/* 罐编号靠右：它排在行尾，左边留出间距不贴着罐号 */
+	margin-left: 12rpx;
+	flex: 0 0 auto;
 }
 
 .slot-can-code {
@@ -1496,14 +1500,20 @@ export default {
 	color: #5a6b77;
 }
 
+/* 罐行：罐号在左、罐编号靠右 */
+.can-head {
+	align-items: center;
+}
+
 /* 20 位箱号 / 罐号在窄屏上必须能折行：
-   不给 min-width:0 的话，flex 子项会直接溢出而不是换行。 */
+   不给 min-width:0 的话，flex 子项会直接溢出而不是换行。
+   编号按采集顺序排在行尾（靠右对齐），所以码在左、编号在右。 */
 .box-head .code,
-.slot-can-code.code {
+.can-head .code {
 	flex: 1;
 	min-width: 0;
-	margin-left: 12rpx;
-	text-align: right;
+	margin-right: 12rpx;
+	text-align: left;
 	word-break: break-all;
 	word-wrap: break-word;
 }
