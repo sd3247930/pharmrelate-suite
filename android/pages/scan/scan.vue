@@ -1221,6 +1221,19 @@ export default {
 				this.event = eventOf(EVENT.WRONG_STATE, `当前步骤是「${this.wizard.prompt}」，不接受手动输入。`, false)
 				return
 			}
+			// 粒子通道也要过一遍严格提取：含字母一律报警，
+			// 绝不静默把字母剔掉当成数字（三条通道同一口径）
+			const dirty = codes.map((code) => extractDigits(code, 1)).find((item) => item.illegal)
+			if (dirty) {
+				this.alarm(
+					eventOf(
+						'ILLEGAL_CHAR',
+						`条码 ${dirty.code} 含非数字字符「${dirty.illegal}」，已拒绝。请核对标签后重扫（不会自动把字母换成数字）。`,
+						true
+					)
+				)
+				return
+			}
 			this.handle(applyCodes(this.batch, codes))
 		},
 
