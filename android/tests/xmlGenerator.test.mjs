@@ -26,6 +26,8 @@ const genSource = readFileSync(service('xmlGenerator.js'), 'utf8').replace(
 	`from '${localUrl}'`
 )
 const xg = await import(toDataUrl(genSource))
+// 同一份 localBatch（data: URL 加载），只用来读虚拟箱号常量，保证不与产品代码漂移
+const lb = await import(localUrl)
 
 let passed = 0
 const failures = []
@@ -264,6 +266,52 @@ const skipNodes = xg.exportNodes(emptyBoxBatch)
 equal(skipNodes.nodes.length, 3, '未采集的整箱被跳过，只剩第 2 箱的 3 个节点')
 equal(skipNodes.skipped, 3, '第 1 箱的箱/罐/粒子都计入跳过')
 check(xg.renderXml(emptyBoxBatch).includes('<Code curCode="9" packLayer="3" flag="2"/>'), '第 2 箱正常输出')
+
+// ---------------------------------------------------------------------------
+section('⑥之二 虚拟箱（箱数 = 0）：XML 里必须仍有 packLayer="3"，不能是空文件')
+// ---------------------------------------------------------------------------
+
+const virtualBoxBatch = {
+	batchNo: '20260929',
+	produceDate: '2026-09-29',
+	expireDate: '2026-11-28',
+	boxes: [
+		{
+			boxIndex: 1,
+			boxCode: lb.VIRTUAL_BOX_CODE,
+			virtual: true,
+			reviewConfirmed: true,
+			cans: [
+				{
+					canIndex: 1,
+					canCode: '80217629000000001005',
+					plannedParticleCount: 1,
+					confirmed: true,
+					particles: ['82062339000000001004']
+				}
+			]
+		}
+	]
+}
+const virtualNodes = xg.exportNodes(virtualBoxBatch)
+const virtualXml = xg.renderXml(virtualBoxBatch)
+
+equal(lb.VIRTUAL_BOX_CODE, '80217619999999999999', '虚拟箱号常量')
+equal(virtualNodes.nodes.length, 3, '虚拟箱也有 3 个节点（箱 + 罐 + 粒子）')
+equal(virtualNodes.skipped, 0, '虚拟箱场景没有任何节点被跳过')
+check(
+	virtualXml.includes(`<Code curCode="${lb.VIRTUAL_BOX_CODE}" packLayer="3" flag="2"/>`),
+	'虚拟箱节点存在且 packLayer="3"（不是空文件）'
+)
+check(
+	virtualXml.includes(`packLayer="2" parentCode="${lb.VIRTUAL_BOX_CODE}"`),
+	'罐的 parentCode 指向虚拟箱'
+)
+check(
+	virtualXml.includes('packLayer="1" parentCode="80217629000000001005"'),
+	'粒子仍然指向自己的罐'
+)
+equal(virtualXml.split('\n').filter((line) => line.includes('<Code ')).length, 3, '恰好 3 个 Code 节点')
 
 // ---------------------------------------------------------------------------
 section('⑦ 文件名格式 Relation_{批号}_{yyyyMMddHHmmss}.html')

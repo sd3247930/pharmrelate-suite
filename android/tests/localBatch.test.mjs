@@ -82,7 +82,7 @@ const P1 = particle(3001)
 const P2 = particle(3002)
 const P3 = particle(3003)
 
-function draft(boxCounts) {
+function draft(boxCounts, options) {
 	const created = lb.createDraft({
 		batchNo: 'T-20260927',
 		produceDate: '2026-09-27',
@@ -90,7 +90,7 @@ function draft(boxCounts) {
 		deviceId: 'and-test-device'
 	})
 	if (!boxCounts) return created
-	const outcome = lb.saveStructure(created, boxCounts)
+	const outcome = lb.saveStructure(created, boxCounts, options)
 	if (outcome.issues && outcome.issues.length) throw new Error('测试结构不合法：' + outcome.issues[0].message)
 	return outcome.batch
 }
@@ -219,8 +219,68 @@ check(
 equal(lb.validateStructure([[1, 1], [1]]).length, 0, '各箱罐数独立（2 罐 + 1 罐）→ 通过')
 equal(lb.particleTotal([1, 2, 3]), 6, '一维数组求和')
 equal(lb.particleTotal([[1, 2], [3]]), 6, '二维数组求和')
-equal(lb.MIN_BOXES, 1, '箱数下限 = 1')
+equal(lb.MIN_BOXES, 0, '箱数下限 = 0（0 表示不扫箱号 → 生成虚拟箱）')
+equal(lb.MIN_STRUCTURE_GROUPS, 1, '数据结构至少要 1 组罐（「0 箱」落库后是 1 组罐 + 虚拟箱）')
 equal(lb.MAX_BOXES, 5, '箱数上限 = 5')
+
+// ---------------------------------------------------------------------------
+section('虚拟箱（箱数 = 0）：XML 必须仍有 packLayer="3"，不能是空文件')
+// ---------------------------------------------------------------------------
+
+equal(lb.VIRTUAL_BOX_CODE, '80217619999999999999', '虚拟箱号固定为 9 打头的串')
+equal(lb.validateStructure([['2']], { virtualBox: true }).length, 0, '虚拟箱：1 组罐 → 通过')
+check(
+	lb.validateStructure([['2'], ['2']], { virtualBox: true }).some((item) => item.code === 'VIRTUAL_BOX_SHAPE'),
+	'虚拟箱：两组罐 → 拒绝（虚拟箱只会生成一个）'
+)
+
+const vBatch = draft([['2']], { virtualBox: true })
+equal(vBatch.boxes.length, 1, '虚拟箱场景仍然落 1 个箱节点')
+equal(vBatch.boxes[0].boxCode, lb.VIRTUAL_BOX_CODE, '箱号被预填为虚拟箱号')
+equal(vBatch.boxes[0].virtual, true, '标记为虚拟箱')
+equal(vBatch.boxes[0].reviewConfirmed, true, '虚拟箱没有实物可核对 → 直接置真')
+equal(lb.deriveWizard(vBatch).phase, 'can', '向导直接进罐号相位，跳过拍箱号')
+
+let vFlow = lb.applyCodes(vBatch, [CAN1]).batch
+vFlow = lb.applyCodes(vFlow, [P1, P2]).batch
+vFlow = lb.confirmCanReview(vFlow, true).batch
+equal(lb.deriveWizard(vFlow).phase, 'review', '虚拟箱不额外要求一次箱核对，直接进整体核对')
+
+// 对照组：普通 1 箱仍然要求拍箱号
+equal(lb.deriveWizard(draft([['2']])).phase, 'box', '普通箱仍然从拍箱号开始')
+
+// ---------------------------------------------------------------------------
+section('严格提取：只清已知分隔符，非法字符必须报警而不是静默清洗')
+// ---------------------------------------------------------------------------
+
+equal(lb.extractDigits('8021762-0000015372035', 2).code, '80217620000015372035', '罐码连字符被清掉')
+equal(lb.extractDigits('8021762-0000015372035', 2).illegal, '', '正常罐码没有非法字符')
+equal(lb.extractDigits(' 8021761-0000014066041 ', 3).code, '80217610000014066041', '箱码首尾空格 + 连字符一起清')
+check(lb.extractDigits('A8021761-0000014066041', 3).illegal.includes('A'), '多余字母 A → 报出来')
+check(lb.extractDigits('8O21761-0000014066041', 3).illegal.includes('O'), '字母 O 混入 → 报出来（绝不替换成 0）')
+equal(
+	lb.extractDigits('A8021761-0000014066041', 3).code,
+	'A80217610000014066041',
+	'code 原样保留非法字符，便于操作员核对'
+)
+check(!lb.extractDigits('A8021761-0000014066041', 3).code.includes('-'), '已知分隔符仍然被清掉')
+equal(lb.extractDigits('82062330000362322676', 1).illegal, '', '粒子码不清洗也不报非法')
+
+// ---------------------------------------------------------------------------
+section('强制结束本罐：没扫满也能收尾，缺漏交给整体核对如实显示')
+// ---------------------------------------------------------------------------
+
+let fe = draft([[3]])
+fe = lb.applyCodes(fe, [BOX1]).batch
+fe = lb.applyCodes(fe, [CAN1]).batch
+fe = lb.applyCodes(fe, [P1]).batch
+equal(lb.deriveWizard(fe).phase, 'particle', '只扫了 1/3 → 仍在粒子相位（本来到不了 CAN_REVIEW）')
+const feOut = lb.forceEndCan(fe)
+equal(feOut.event.code, lb.EVENT.OK, '粒子相位可以强制结束本罐')
+equal(feOut.batch.boxes[0].cans[0].confirmed, true, '本罐标记为已确认')
+equal(lb.deriveWizard(feOut.batch).phase, 'box_review', '推进到本箱核对')
+equal(lb.findUsage(feOut.batch, P1, 1).where, '箱 1 罐 1 / 槽位 1', '已扫的粒子仍在，没被补齐也没被抹掉')
+check(lb.forceEndCan(feOut.batch).event.code === lb.EVENT.WRONG_STATE, '不在粒子相位 → 拒绝，避免重复触发')
 
 // ---------------------------------------------------------------------------
 section('本地存储与状态机')

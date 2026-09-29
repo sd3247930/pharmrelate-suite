@@ -268,6 +268,80 @@ v1.3.2 的「箱/罐 = 短号 1~9999」口径已**彻底作废**（现场实物�
 
 ---
 
+## 三之四、批量连续扫码 · 虚拟箱 · 去重（并入 v1.4.0）
+
+### 3.4.1 批量连续扫码（`plus.barcode`）
+
+粒子环节新增「**批量连续扫码**」。为什么不能沿用 `uni.scanCode`：它是「一次调一个码」的
+系统扫码界面，扫 A4 纸上几十个竖向条码要反复开合，效率不可接受。
+
+改用 `plus.barcode.create()` 在当前 webview 里挂一个常驻原生扫码视图：
+
+- `onmarked` 每识别到一个码就回调一次，可以连续扫；
+- 码制过滤器：`CODE128 / CODE39 / CODE93 / EAN13 / EAN8`；
+- **资源释放有四条出口**，每条都会走 `stopBatchScan()` 调 `cancel()` + `close()`：
+  ① 点「完成扫码」；② 切到其它 Tab（`onHide`）；③ 离开页面（`onUnload`）；
+  ④ 相位离开粒子采集（`reload()` 里判断）。
+  这是本模块唯一会常驻占用摄像头的功能，漏一条就会留下一个关不掉的黑框。
+
+**降级路径**：`plus.barcode` 起不来时（原生容器/ROM 差异）界面会明确提示，
+并保留「单次扫码一个」与「手动输入」两条通道。**本项目没有 OCR 引擎**
+（实测：`plus.barcode` 无 `scanImage`、`plus` 无任何 ocr/ai/ml/vision 命名空间），
+所以降级只能是「拍照 → 人眼读数 → 手动输入」，**不存在「在照片上点击识别」这种能力**。
+
+### 3.4.2 虚拟箱（箱数 = 0）
+
+设置页的「纸箱数」下拉是 `[0,1,2,3,4,5]`。选 **0** 表示**本次作业不扫箱号**——
+业务上它可能是「这批货没有纸箱，只有罐」，也可能是「有箱但不扫」，
+两种情况**统一处理**：数据层自动生成 1 个虚拟箱。
+
+| 项 | 值 |
+| --- | --- |
+| 虚拟箱号 | `80217619999999999999`（9 打头，一眼可辨是程序生成的） |
+| 落库形态 | `boxes: [{ boxCode: 虚拟箱号, virtual: true, reviewConfirmed: true, cans: [...] }]` |
+| 向导 | 箱号已写好 → **直接跳过拍箱号**，从罐号开始 |
+| 箱核对 | `reviewConfirmed` 预置 true，不再多问一次 |
+| XML | 仍然产出 `packLayer="3"` 节点，罐的 `parentCode` 指向虚拟箱 —— **绝不会导出空文件** |
+
+之所以必须造这个虚拟箱：`xmlGenerator.exportNodes()` 对**箱号为空**的箱是整箱跳过的
+（连同它的罐与粒子），不补虚拟节点的话「0 箱」导出的 XML 会一条记录都没有。
+另外 `80217610000000000000` 这个号**不能用**——它被后端 parentCode 完整性测试当作反例夹具占用了。
+
+设置页选 0 时会显式提示操作员：「本次不扫描箱号，系统会自动生成虚拟箱节点」；
+扫码页的槽位列表里那一箱也会标成「箱 1（虚拟箱）」。
+
+### 3.4.3 去重规则（折中方案）
+
+连续扫码每次收到码都会过三道闸，**区分「真重复」与「扫错罐」**：
+
+| 情形 | 处理 |
+| --- | --- |
+| 含非数字字符（字母 O 混入等） | **报警拒绝**，绝不 `\D` 全剔 |
+| **本次连续扫码会话内**刚扫过的码 | `vibrateLong` + Toast「重复条码已自动忽略」，**静默忽略、不写库** |
+| 跨罐 / 跨箱已存在 | 交给 `applyCodes` **报警** + 弹窗要求核对（可能是扫到了别的罐的标签） |
+
+会话集合用 `Set`，挂在组件实例上（不进 `data`，不需要 Vue 建响应式）。
+换箱 / 换罐 / 换相位会清空它——否则跨罐的真码会被误判成「会话内重复」而静默吞掉。
+
+### 3.4.4 漏扫提示与「本罐先结束」
+
+- 粒子相位顶部有**高亮警告条**：`⚠️ 可能漏扫：当前已扫 X 个，还差 Y 个未扫描`；
+- 新增「**本罐先结束**」按钮：没扫满时弹二次确认，确认后由 `forceEndCan()` 收尾。
+
+为什么需要这个按钮：`deriveWizard()` 只有在**已扫满**之后才推出 `CAN_REVIEW` 相位，
+所以「没扫满想收尾」原本根本走不到「本罐确认无误」那个按钮上，只能靠「结束整批」绕。
+配套地，`deriveWizard()` 改成 `filled < planned && !can.confirmed` 才回粒子相位——
+已确认的罐不再要求扫满，缺漏交给整体核对如实显示（与提前结束整批同一口径）。
+
+### 3.4.5 日期与下拉
+
+- 界面标签「生产日期」→「**标示日期**」，自动有效期由 **+30 天改为 +60 天**；
+  **XML 属性名 `madeDate` 一个字没动**（黄金基准是字节级冻结的）；
+- 手动改过有效期后不会被自动计算覆盖；
+- 「纸箱数」「罐数」由步进器改成 `picker` 下拉（箱 `[0..5]`、罐 `[1..5]`）。
+
+---
+
 ## 四、本地数据层设计（`services/localBatch.js`）
 
 纯 ESM，**不 import 任何模块**（`uni` 通过可注入的 storage adapter 访问），
@@ -275,12 +349,12 @@ v1.3.2 的「箱/罐 = 短号 1~9999」口径已**彻底作废**（现场实物�
 
 | 分组 | 关键导出 | 说明 |
 | --- | --- | --- |
-| 常量 | `BARCODE_LENGTH`、`CODE_PREFIXES`、`CASCADE`、`FIXED_PARAMS`、`MAX_BOXES` | 箱/罐/粒子**统一 20 位 + 前缀**（箱 `8021761` / 罐 `8021762` / 粒子 `8206233`），层级只看前缀；`cascade="1:5:2500"` 固定字面量；箱 1~5；13 项系统固定参数 |
+| 常量 | `BARCODE_LENGTH`、`CODE_PREFIXES`、`CASCADE`、`FIXED_PARAMS`、`MAX_BOXES`、`MIN_BOXES`、`MIN_STRUCTURE_GROUPS`、`VIRTUAL_BOX_CODE` | 箱/罐/粒子**统一 20 位 + 前缀**（箱 `8021761` / 罐 `8021762` / 粒子 `8206233`），层级只看前缀；`cascade="1:5:2500"` 固定字面量；`MIN_BOXES = 0`（0 = 不扫箱号 → 虚拟箱），`MIN_STRUCTURE_GROUPS = 1`（数据结构里至少 1 组罐）；13 项系统固定参数 |
 | 存储 | `setStorageAdapter` `loadBatches` `saveBatch` `getActiveBatch` `listBatches` `removeBatch` `clearAll` | `uni.setStorageSync` 封装，可注入内存实现做单测；读时自动迁移老数据 |
 | 迁移 | `migrateBatch` | v1.3.0 单箱 → v1.3.1 多箱，幂等 |
-| 校验 | `classifyCode` `cleanLayerCode` `validateLayerCode` `describeCodeIssue` `validateBaseInfo` `validateStructure` `particleTotal` `planCounts` `planSummary` `progress` | 分层校验（箱/罐/粒子统一 20 位 + 前缀，箱/罐先剥连字符再判）；结构校验吃「箱 → 罐」二维数组；箱 1~5、每箱罐独立 1~5、每罐 1~2500、**单批 ≤12500 硬上限** |
-| 批次 | `createDraft` `updateBaseInfo` `buildBoxes` `saveStructure` `transition` | 状态机 `草稿 → 采集中 → 待核对 → 已核对`，非法流转拒绝 |
-| 向导 | `deriveWizard` `findCan` `findUsage` `applyCodes` `confirmCanReview` `confirmBoxReview` `finishRemaining` `registerEarlyEnd` | 相位见 §2.2；错层/重复/溢出拦截；`findUsage` 是**分层作用域**查重（箱全批唯一 / 罐本箱唯一 / 粒子全批唯一） |
+| 校验 | `classifyCode` `cleanLayerCode` `extractDigits` `validateLayerCode` `describeCodeIssue` `validateBaseInfo` `validateStructure` `particleTotal` `planCounts` `planSummary` `progress` | 分层校验（箱/罐/粒子统一 20 位 + 前缀，箱/罐先剥连字符再判）；`extractDigits` 返回 `{code, illegal}` —— **只清已知分隔符，残留非数字字符交调用方报警**；结构校验吃「箱 → 罐」二维数组，`{virtualBox:true}` 时只允许 1 组罐；每罐 1~2500、**单批 ≤12500 硬上限** |
+| 批次 | `createDraft` `updateBaseInfo` `buildBoxes` `saveStructure` `transition` | 状态机 `草稿 → 采集中 → 待核对 → 已核对`，非法流转拒绝；`buildBoxes/saveStructure` 接受 `{virtualBox}`（选 0 箱时预填虚拟箱号 + `reviewConfirmed`） |
+| 向导 | `deriveWizard` `findCan` `findUsage` `applyCodes` `confirmCanReview` `confirmBoxReview` `forceEndCan` `finishRemaining` `registerEarlyEnd` | 相位见 §2.2；错层/重复/溢出拦截；`findUsage` 是**分层作用域**查重（箱全批唯一 / 罐本箱唯一 / 粒子全批唯一）；`forceEndCan` 让「没扫满也能收尾」（见 §3.4.4） |
 | 槽位 | `replaceSlot` `deleteSlot` `undo` `redo` `historyState` | 双坐标寻址；撤销栈上限 50 步，超出丢最旧 |
 | 核对 | `review` | 5 项检查（罐数一致、粒子总数一致、总数≤12500、每罐≤2500、箱号/罐号/粒子码未缺漏）+ `perBox` + `perCan` |
 
@@ -337,7 +411,7 @@ powershell -ExecutionPolicy Bypass -File scripts\serve-lan.ps1
 ## 七、测试与验收证据
 
 ```powershell
-# 单测共 341 项：本地数据层 225 + 识别契约层 66 + XML 生成器 50（Node 直跑，无需 HBuilderX）
+# 单测共 373 项：本地数据层 250 + 识别契约层 66 + XML 生成器 57（Node 直跑，无需 HBuilderX）
 cd "<ANDROID_PROJECT_DIR>"
 node tests/localBatch.test.mjs
 ```
@@ -504,3 +578,24 @@ H5 / 真机端到端脚本与截图在
 - 选择「HTML 查看器」后实测能打开并完整显示 XML（标签没有被吞）；
 - 文件不存在/已被清理 → Toast「文件不存在或已被删除」；没有可打开的应用 → 弹可操作提示，不静默；
 - 小坑：部分 ROM 的「打开方式」选择器会**吞掉第一次点击**，操作员再点一次即可（真机脚本里做了重试）。
+
+### 批量连续扫码 · 虚拟箱 · 去重（并入 v1.4.0）
+
+- [x] 粒子环节新增「批量连续扫码」（`plus.barcode.create` + `onmarked`）
+- [x] 资源释放四条出口齐全：完成扫码 / `onHide`（切 Tab）/ `onUnload` / 相位离开粒子采集
+- [x] 降级路径明确：`plus.barcode` 起不来时提示并保留「单次扫码一个」与手动输入；
+      **不承诺「照片上点击识别」**（本机无 OCR 引擎）
+- [x] 箱数下拉 `[0..5]`；选 0 生成虚拟箱 `80217619999999999999`
+      （预填箱号 + `reviewConfirmed=true`，向导跳过拍箱号）
+- [x] 虚拟箱导出仍有 `packLayer="3"` 节点、罐的 `parentCode` 指向虚拟箱、**XML 非空**
+      （单测锁定：3 个 Code 节点、0 个跳过）
+- [x] 去重折中方案：会话内重复 → 震动 + Toast 静默忽略；跨罐/跨箱 → 报警 + 弹窗核对
+- [x] `extractDigits()` 严格化：只清已知分隔符，残留非数字字符报警，**绝不做 `\D` 全剔**
+- [x] 箱号确认弹窗文案改为「这是箱号吗？(8021761...)」，[不正确] 自动重新调起摄像头
+- [x] 漏扫高亮警告条 + 「本罐先结束」二次确认（`forceEndCan()`）
+- [x] `deriveWizard()`：已确认的罐不再要求扫满（`filled < planned && !can.confirmed`）
+- [x] 界面「生产日期」→「标示日期」，自动有效期 +30 → **+60 天**；**XML 属性 `madeDate` 未动**
+- [x] 箱数/罐数由步进器改为 `picker` 下拉
+- [x] 单测 373 项全过（localBatch 250 + numberRecognizer 66 + xmlGenerator 57）
+- [x] `check.ps1 -Full` 13/13 全过（后端与电脑端一行未改）
+- [ ] 真机验证：批量连续扫码（先试扫 10 个码测耗时）/ 虚拟箱导出 XML / 漏扫警告 —— 待现场取证

@@ -14,12 +14,12 @@
 			<text class="field-label">批号（必填）</text>
 			<input class="input code" v-model="form.batchNo" placeholder="例如 20260927" />
 
-			<text class="field-label">生产日期（必填）</text>
+			<text class="field-label">标示日期（必填）</text>
 			<picker mode="date" :value="form.produceDate" @change="onProduceDate">
-				<view class="input code picker-value">{{ form.produceDate || '请选择生产日期' }}</view>
+				<view class="input code picker-value">{{ form.produceDate || '请选择标示日期' }}</view>
 			</picker>
 
-			<text class="field-label">有效期（必填，需大于生产日期）</text>
+			<text class="field-label">有效期（必填，需大于标示日期）</text>
 			<picker mode="date" :value="form.expireDate" @change="onExpireDate">
 				<view class="input code picker-value">{{ form.expireDate || '请选择有效期' }}</view>
 			</picker>
@@ -48,14 +48,20 @@
 			</view>
 			<text class="hint">每箱罐数各自独立；单批粒子总数上限 {{ maxBatch }} 粒（超限会被挡住）。</text>
 
-			<view class="row-between field">
-				<text class="field-label">纸箱数（1～5）</text>
-				<view class="stepper">
-					<button class="step-btn" :disabled="!canEditStructure" @click="stepBox(-1)">－</button>
-					<text class="step-value code">{{ totalBoxes }}</text>
-					<button class="step-btn" :disabled="!canEditStructure" @click="stepBox(1)">＋</button>
-				</view>
-			</view>
+			<text class="field-label">纸箱数（0 = 本次不扫箱号）</text>
+			<picker
+				mode="selector"
+				:range="boxCountOptions"
+				:value="boxCount"
+				:disabled="!canEditStructure"
+				@change="onBoxCountChange"
+			>
+				<view class="input code picker-value">{{ boxCountLabel }}</view>
+			</picker>
+			<text v-if="isVirtualBox" class="hint">
+				已选「0 箱」：本次不扫描箱号。系统会自动生成一个虚拟箱节点
+				（80217619999999999999），保证罐的上级指向合法、导出的 XML 不会为空文件。
+			</text>
 
 			<view v-for="(counts, boxIndex) in boxPlan" :key="boxIndex" class="box-block">
 				<view class="row-between box-head">
@@ -64,11 +70,15 @@
 				</view>
 				<view class="row-between field">
 					<text class="field-label">箱 {{ boxIndex + 1 }} 罐数</text>
-					<view class="stepper">
-						<button class="step-btn" :disabled="!canEditStructure" @click="stepCan(boxIndex, -1)">－</button>
-						<text class="step-value code">{{ counts.length }}</text>
-						<button class="step-btn" :disabled="!canEditStructure" @click="stepCan(boxIndex, 1)">＋</button>
-					</view>
+					<picker
+						mode="selector"
+						:range="canCountOptions"
+						:value="counts.length - 1"
+						:disabled="!canEditStructure"
+						@change="onCanCountChange(boxIndex, $event)"
+					>
+						<view class="picker-inline code">{{ counts.length }} 罐 ▾</view>
+					</picker>
 				</view>
 
 				<view v-for="(item, canIndex) in counts" :key="canIndex" class="particle-row">
@@ -246,6 +256,9 @@ export default {
 			form: { batchNo: '', produceDate: '', expireDate: '' },
 			// 箱 → 罐 → 粒子数字符串（boxPlan[0] = 第 1 箱的每罐粒子数）
 			boxPlan: [['']],
+			// 界面选的「纸箱数」。0 = 本次不扫箱号（落库时生成虚拟箱）。
+			// boxPlan 的长度始终是 max(1, boxCount)：选 0 时那唯一一组罐会落成虚拟箱。
+			boxCount: 1,
 			baseUrl: '',
 			wsUrl: '',
 			token: '',
@@ -260,8 +273,26 @@ export default {
 	},
 
 	computed: {
+		boxCountOptions() {
+			const list = []
+			for (let n = MIN_BOXES; n <= MAX_BOXES; n += 1) list.push(String(n))
+			return list
+		},
+		canCountOptions() {
+			const list = []
+			for (let n = MIN_CANS; n <= MAX_CANS; n += 1) list.push(String(n))
+			return list
+		},
+		isVirtualBox() {
+			return this.boxCount === 0
+		},
+		boxCountLabel() {
+			return this.isVirtualBox ? '0 箱（不扫箱号 · 用虚拟箱）' : `${this.boxCount} 箱`
+		},
 		totalBoxes() {
-			return this.boxPlan.length
+			// 界面口径 = 用户选的数量（选 0 就显示 0）；落库后的虚拟箱不在设置页体现，
+			// 免得操作员以为自己选了 1 箱。
+			return this.boxCount
 		},
 		totalCans() {
 			return this.boxPlan.reduce((sum, counts) => sum + counts.length, 0)
@@ -329,6 +360,9 @@ export default {
 			const planned = planCounts(batch)
 			if (planned.length) {
 				this.boxPlan = planned.map((counts) => counts.map((value) => String(value)))
+				const firstBox = (batch.boxes || [])[0]
+				// 虚拟箱在数据里是 1 个箱节点，但在界面上要还原成「0 箱」
+				this.boxCount = firstBox && firstBox.virtual ? 0 : this.boxPlan.length
 			} else if (!this.boxPlan.length) {
 				this.boxPlan = [['']]
 			}
@@ -340,11 +374,13 @@ export default {
 
 		onProduceDate(event) {
 			this.form.produceDate = event.detail.value
-			// 有效期默认给 30 天（与桌面端 validateDate = today + 30 的口径一致）：
-			// 否则操作员很容易选成同一天，被"有效期必须大于生产日期"挡住而不知道为什么。
+			// 有效期默认给**标示日期 + 60 天**（业务拍板 2026-09-29）：
+			// 否则操作员很容易选成同一天，被「有效期必须大于标示日期」挡住而不知道为什么。
+			// 手动改过有效期就不再覆盖（下面的 current <= produceDate 判断是唯一的覆盖条件）。
+			// 注意：界面叫「标示日期」，XML 属性名仍是 madeDate，不动。
 			const current = this.form.expireDate
 			if (!current || current <= this.form.produceDate) {
-				this.form.expireDate = addDays(this.form.produceDate, 30)
+				this.form.expireDate = addDays(this.form.produceDate, 60)
 			}
 		},
 
@@ -397,35 +433,39 @@ export default {
 			uni.pageScrollTo({ selector: '#structureCard', duration: 300 })
 		},
 
-		/** 纸箱数步进：越界弹 Alert。 */
-		stepBox(delta) {
-			const next = this.boxPlan.length + delta
-			if (next < MIN_BOXES || next > MAX_BOXES) {
-				uni.showModal({
-					title: '纸箱数超出范围',
-					content: '纸箱数必须在 ' + MIN_BOXES + '～' + MAX_BOXES + ' 之间',
-					showCancel: false
-				})
+		/**
+		 * 纸箱数下拉。picker(mode=selector) 的 `value` / `event.detail.value` 都是**下标**，
+		 * 而 boxCountOptions 是 ['0','1',…,'5']，下标恰好等于箱数，所以直接用。
+		 *
+		 * 选 0 时 boxPlan 保留**唯一一组罐**（长度仍是 1）——那一组落库时会变成虚拟箱；
+		 * 数据结构里永远至少有一组罐，所以数组长度不跟着变成 0。
+		 */
+		onBoxCountChange(event) {
+			const next = Number(event.detail && event.detail.value)
+			if (!Number.isFinite(next) || next < MIN_BOXES || next > MAX_BOXES) return
+			if (next === this.boxCount) return
+			this.boxCount = next
+			if (next === 0) {
+				const first = this.boxPlan[0] || ['']
+				this.boxPlan = [first.length ? first.slice() : ['']]
 				return
 			}
+			const groups = this.boxPlan.map((counts) => counts.slice())
 			// 新增的箱子默认 1 罐、粒子数待填
-			this.boxPlan = delta > 0 ? this.boxPlan.concat([['']]) : this.boxPlan.slice(0, next)
+			while (groups.length < next) groups.push([''])
+			this.boxPlan = groups.slice(0, next)
 		},
 
-		/** 某一箱的罐数步进：越界弹 Alert（每箱各自独立）。 */
-		stepCan(boxIndex, delta) {
-			const counts = this.boxPlan[boxIndex] || []
-			const next = counts.length + delta
-			if (next < MIN_CANS || next > MAX_CANS) {
-				uni.showModal({
-					title: '罐数超出范围',
-					content: '罐数必须在 ' + MIN_CANS + '～' + MAX_CANS + ' 之间',
-					showCancel: false
-				})
-				return
-			}
-			const list = this.boxPlan.map((item) => item.slice())
-			list[boxIndex] = delta > 0 ? counts.concat(['']) : counts.slice(0, next)
+		/** 某一箱的罐数下拉（每箱各自独立）。同样注意 picker 给的是下标。 */
+		onCanCountChange(boxIndex, event) {
+			const index = Number(event.detail && event.detail.value)
+			if (!Number.isFinite(index) || index < 0 || index >= this.canCountOptions.length) return
+			const next = index + 1
+			const list = this.boxPlan.map((counts) => counts.slice())
+			const current = list[boxIndex]
+			if (!current || next === current.length) return
+			while (current.length < next) current.push('')
+			list[boxIndex] = current.slice(0, next)
 			this.boxPlan = list
 		},
 
@@ -438,7 +478,10 @@ export default {
 		},
 
 		structureIssues() {
-			return validateStructure(this.boxPlan.map((counts) => counts.map((value) => Number(value))))
+			return validateStructure(
+				this.boxPlan.map((counts) => counts.map((value) => Number(value))),
+				{ virtualBox: this.isVirtualBox }
+			)
 		},
 
 		saveStructureDraft() {
@@ -460,7 +503,8 @@ export default {
 			// 先抓取用户此刻输入的包装结构：后面任何回读都不该动它。
 			const counts = this.boxPlan.map((list) => list.map((value) => Number(value)))
 			if (!this.persistBaseInfo()) return
-			const issues = validateStructure(counts)
+			const options = { virtualBox: this.isVirtualBox }
+			const issues = validateStructure(counts, options)
 			if (issues.length) {
 				uni.showModal({
 					title: '包装结构不合法',
@@ -477,7 +521,7 @@ export default {
 			if (!batch) {
 				batch = saveBatch(createDraft({ ...this.form, deviceId: this.device.fingerprint }))
 			}
-			const result = saveStructure(batch, counts)
+			const result = saveStructure(batch, counts, options)
 			if (result.issues && result.issues.length) {
 				uni.showModal({
 					title: '包装结构不合法',
@@ -651,6 +695,19 @@ function addDays(iso, days) {
 
 .picker-value {
 	line-height: 76rpx;
+}
+
+/* 行内下拉：箱数 / 罐数这类右对齐的小控件 */
+.picker-inline {
+	display: inline-block;
+	min-width: 160rpx;
+	padding: 10rpx 20rpx;
+	border: 1rpx solid #d6dee3;
+	border-radius: 8rpx;
+	background: #ffffff;
+	font-size: 26rpx;
+	color: #101a22;
+	text-align: center;
 }
 
 .fold {

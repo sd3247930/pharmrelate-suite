@@ -121,9 +121,18 @@
 				</view>
 			</view>
 			<view v-else-if="wizard.phase === 'particle'" class="actions">
-				<button class="primary scan-btn" :disabled="busy" @click="scanParticle">
-					📷 打开摄像头拍粒子（{{ currentCanScanned }}/{{ currentCanPlanned }}）
-				</button>
+				<template v-if="batchScanning">
+					<button class="primary scan-btn" :disabled="busy" @click="stopBatchScan(false)">
+						✅ 完成扫码（已扫 {{ currentCanScanned }}/{{ currentCanPlanned }}）
+					</button>
+				</template>
+				<template v-else>
+					<button class="primary scan-btn" :disabled="busy" @click="startBatchScan">
+						📷 批量连续扫码（{{ currentCanScanned }}/{{ currentCanPlanned }}）
+					</button>
+					<button class="secondary" :disabled="busy" @click="scanParticle">单次扫码一个</button>
+					<button class="ghost" :disabled="busy" @click="endCanEarly">本罐先结束（缺漏留给整体核对）</button>
+				</template>
 			</view>
 			<view v-else-if="wizard.phase === 'can_review'" class="actions">
 				<button class="primary" :disabled="busy" @click="confirmCanDone">本罐确认无误</button>
@@ -141,6 +150,9 @@
 			<view v-else-if="wizard.phase === 'review'" class="actions">
 				<button class="primary" :disabled="busy" @click="runReview">开始整体核对</button>
 			</view>
+
+			<!-- 需求 7：漏扫高亮警告条（只在本罐没扫满时出现） -->
+			<text v-if="underFilledHint" class="underfill-warn">{{ underFilledHint }}</text>
 
 			<text class="hint">
 				箱号 = 一维条形码（前缀 8021761）；罐号 = 方形二维码（前缀 8021762），标签上的连字符自动清洗；粒子 = 20 位条码（前缀 8206233）。多码、错层、重复、溢出都会震动报警。
@@ -160,7 +172,7 @@
 			</view>
 			<view v-for="box in slotRows" :key="box.boxIndex" class="box-group">
 				<view class="row-between box-head">
-					<text class="box-title">箱 {{ box.boxIndex }}</text>
+					<text class="box-title">箱 {{ box.boxIndex }}{{ box.virtual ? '（虚拟箱）' : '' }}</text>
 					<text class="hint code">{{ box.boxCode || '（未扫箱号）' }}</text>
 				</view>
 				<view v-for="row in box.cans" :key="row.canIndex" class="slot-row">
@@ -288,9 +300,11 @@ import {
 	deleteSlot,
 	deriveWizard,
 	describeCodeIssue,
+	extractDigits,
 	finishRemaining,
 	findCan,
 	findUsage,
+	forceEndCan,
 	getActiveBatch,
 	historyState,
 	redo,
@@ -307,7 +321,8 @@ const LOCAL_EVENT_LABELS = {
 	RETRY: '已放弃',
 	PHOTO: '照片已拍好',
 	MANUAL: '手动输入',
-	EDIT: '需要修改'
+	EDIT: '需要修改',
+	ILLEGAL_CHAR: '条码含非法字符'
 }
 
 /**
@@ -358,7 +373,12 @@ export default {
 			editing: null,
 			replaceValue: '',
 			healthOk: false,
-			localId: ''
+			localId: '',
+			// 批量连续扫码（plus.barcode）：非空表示原生扫码视图正在跑
+			batchScanner: null,
+			batchScanning: false,
+			// 会话去重用的 key（箱-罐-相位）。换罐时会清掉 Set。
+			sessionScanKey: ''
 		}
 	},
 
@@ -396,18 +416,47 @@ export default {
 			return (this.batch.boxes || []).map((box, bIndex) => ({
 				boxIndex: bIndex + 1,
 				boxCode: box.boxCode,
+				virtual: !!box.virtual,
 				cans: (box.cans || []).map((can, cIndex) => ({
 					canIndex: cIndex + 1,
 					canCode: can.canCode,
 					slots: (can.particles || []).map((code, sIndex) => ({ index: sIndex, code }))
 				}))
 			}))
+		},
+		/**
+		 * 漏扫高亮提示（需求 7）：只在粒子相位、且没扫满时出现。
+		 * 文案里同时给「已扫 / 还差」两个数，操作员不用自己算。
+		 */
+		underFilledHint() {
+			if (!this.batch) return ''
+			if (this.wizard.phase !== PHASE.PARTICLE) return ''
+			const missing = this.currentCanPlanned - this.currentCanScanned
+			if (missing <= 0) return ''
+			return `⚠️ 可能漏扫：当前已扫 ${this.currentCanScanned} 个，还差 ${missing} 个未扫描`
 		}
+	},
+
+	/**
+	 * 会话去重集合只挂在实例上（不进 data）：
+	 * Vue 不需要为 Set 建响应式，几万个码的查找仍是 O(1)。
+	 */
+	created() {
+		this.sessionScanned = new Set()
 	},
 
 	onShow() {
 		ensureDefaults()
 		this.reload()
+	},
+
+	// 离开页面 / 切到其它 Tab：必须把原生扫码视图收掉，否则摄像头一直被占着
+	onHide() {
+		this.stopBatchScan(true)
+	},
+
+	onUnload() {
+		this.stopBatchScan(true)
 	},
 
 	methods: {
@@ -433,6 +482,15 @@ export default {
 						prompt: '请先建批次'
 					})
 			this.history = historyState(this.batch || {})
+			// 换箱 / 换罐 / 换相位就把「会话内去重」清掉 ——
+			// 否则跨罐的真码会被当成「刚扫过的重复」静默忽略掉。
+			const key = `${this.wizard.boxIndex}-${this.wizard.canIndex}-${this.wizard.phase}`
+			if (this.sessionScanKey !== key) {
+				this.sessionScanKey = key
+				if (this.sessionScanned) this.sessionScanned.clear()
+			}
+			// 相位一旦离开粒子采集，原生扫码视图必须收掉（否则摄像头一直占着）
+			if (this.wizard.phase !== PHASE.PARTICLE) this.stopBatchScan(true)
 		},
 
 		/** 统一处理本地状态机的结果：报警就震动 + 显示，成功就落盘。 */
@@ -593,6 +651,153 @@ export default {
 		},
 
 		/**
+		 * 批量连续扫码（需求 5）：在当前 webview 里挂一个 plus.barcode 原生扫码视图。
+		 *
+		 * 为什么不用 uni.scanCode：它是「一次调一个码」的系统扫码界面，扫几十个竖向条码
+		 * 要反复开合，效率不可接受。plus.barcode.create() 是常驻视图，onmarked 每识别到一个
+		 * 就回调一次，可以连续扫。
+		 *
+		 * 资源释放：退出方式有四条 —— 点「完成扫码」、切 Tab（onHide）、离开页面（onUnload）、
+		 * 相位离开粒子采集（reload 里判断）。四条都会走 stopBatchScan()。
+		 */
+		startBatchScan() {
+			if (!this.batch) return
+			if (this.wizard.phase !== PHASE.PARTICLE) return
+			// #ifdef APP-PLUS
+			if (this.batchScanner) return
+			try {
+				const view = plus.webview.currentWebview()
+				const filters = [
+					plus.barcode.CODE128,
+					plus.barcode.CODE39,
+					plus.barcode.CODE93,
+					plus.barcode.EAN13,
+					plus.barcode.EAN8
+				]
+				const scanner = plus.barcode.create('pr-batch-barcode', filters, {
+					top: '0px',
+					left: '0px',
+					width: '100%',
+					height: '45%',
+					position: 'absolute',
+					background: '#000000'
+				})
+				scanner.onmarked = (type, code) => this.onBatchCode(code)
+				// 识别失败（没对准）不弹错，连续扫码时会疯狂触发，静默即可
+				scanner.onerror = () => {}
+				view.append(scanner)
+				scanner.start({ conceal: true })
+				this.batchScanner = scanner
+				this.batchScanning = true
+				if (this.sessionScanned) this.sessionScanned.clear()
+				this.event = eventOf('PHOTO', '连续扫码已开始：对准条码逐个扫入，重复的会自动忽略；扫完点「完成扫码」。', false)
+			} catch (error) {
+				this.batchScanner = null
+				this.batchScanning = false
+				this.event = eventOf(
+					'ERROR',
+					`批量扫码起不来（${(error && error.message) || error}）。请改用「单次扫码一个」或手动输入。`,
+					false
+				)
+			}
+			// #endif
+			// #ifndef APP-PLUS
+			this.event = eventOf('ERROR', '批量连续扫码只在 App 端可用（H5 没有 plus.barcode），请用「单次扫码一个」。', false)
+			// #endif
+		},
+
+		/** 收掉原生扫码视图并释放摄像头。silent=true 时不弹 Toast（切页/切 Tab 用）。 */
+		stopBatchScan(silent) {
+			// #ifdef APP-PLUS
+			if (this.batchScanner) {
+				try {
+					this.batchScanner.cancel()
+				} catch (error) {
+					// 视图已经被系统回收时会抛，忽略即可
+				}
+				try {
+					this.batchScanner.close()
+				} catch (error) {
+					// 同上
+				}
+				this.batchScanner = null
+			}
+			// #endif
+			if (this.batchScanning) {
+				this.batchScanning = false
+				if (!silent) uni.showToast({ title: '已结束连续扫码', icon: 'none' })
+			}
+		},
+
+		/**
+		 * 连续扫码每收到一个码就走这里。去重是**折中方案**（需求 6）：
+		 *   1. 含非数字字符 → 报警拒绝（绝不做 \D 全剔，避免把错码洗成合法码）；
+		 *   2. 本次会话内刚扫过 → 震动 + Toast，静默忽略、不写库（真重复）；
+		 *   3. 跨罐 / 跨箱已存在 → 交给 applyCodes 报警 + 弹窗核对（可能扫错了别的罐）。
+		 */
+		onBatchCode(raw) {
+			if (!this.batch) return
+			if (this.wizard.phase !== PHASE.PARTICLE) return
+			const extract = extractDigits(raw, 1)
+			if (extract.illegal) {
+				this.alarm(
+					eventOf(
+						'ILLEGAL_CHAR',
+						`条码 ${raw} 含非数字字符「${extract.illegal}」，已忽略。请核对标签后重扫（不会自动把字母换成数字）。`,
+						true
+					)
+				)
+				return
+			}
+			const code = extract.code
+			if (this.sessionScanned && this.sessionScanned.has(code)) {
+				uni.vibrateLong()
+				uni.showToast({ title: '重复条码已自动忽略', icon: 'none' })
+				return
+			}
+			const result = applyCodes(this.batch, [code])
+			const eventCode = result.event && result.event.code
+			if (eventCode === EVENT.OK) {
+				if (this.sessionScanned) this.sessionScanned.add(code)
+			} else if (eventCode === EVENT.DUPLICATE_CODE) {
+				// 跨罐 / 跨箱：不能静默，弹窗要求核对（连续扫码时保持扫码视图不关，核对完继续扫）
+				uni.showModal({
+					title: '条码已存在',
+					content: `${code} 已被使用过，可能扫到了别的罐的标签。请核对后再继续。`,
+					showCancel: false,
+					confirmText: '知道了'
+				})
+			}
+			this.handle(result)
+		},
+
+		/**
+		 * 本罐先结束（需求 7 的二次确认入口）。
+		 * 为什么需要它：deriveWizard() 只有在「已扫满」之后才会推出 CAN_REVIEW 相位，
+		 * 所以「没扫满就想收尾」在原来根本走不到「本罐确认无误」那个按钮上。
+		 */
+		endCanEarly() {
+			if (!this.batch) return
+			if (this.wizard.phase !== PHASE.PARTICLE) return
+			const missing = this.currentCanPlanned - this.currentCanScanned
+			if (missing <= 0) {
+				this.event = eventOf(EVENT.OK, '本罐已经扫满，请回到「本罐确认无误」。', false)
+				return
+			}
+			uni.showModal({
+				title: '本罐未填满',
+				content: `当前罐未填满（已扫 ${this.currentCanScanned} / 计划 ${this.currentCanPlanned}），确定要强制结束本罐采集吗？缺漏会在整体核对里如实显示。`,
+				confirmText: '强制结束',
+				cancelText: '继续扫',
+				success: (res) => {
+					if (!res.confirm) return
+					this.stopBatchScan(true)
+					this.handle(forceEndCan(this.batch))
+				}
+			})
+		},
+
+		/**
 		 * 业务层收口（识别层之外唯一的写入路径）：清洗 → 20 位 + 前缀校验 → 分层查重 → 写本地数据层。
 		 * 这里再清洗一次是兜底：拍照识别通道会绕过 considerSingle 直接调进来。
 		 */
@@ -638,7 +843,19 @@ export default {
 			const wizard = deriveWizard(this.batch)
 			const expected = kind === 'box' ? 3 : 2
 			const label = kind === 'box' ? '箱号' : '罐号'
-			const code = cleanLayerCode(rawCode, expected)
+			// 严格提取：只清已知分隔符。残留非数字字符 → 报警拒绝，绝不 \D 全剔
+			const extract = extractDigits(rawCode, expected)
+			if (extract.illegal) {
+				this.alarm(
+					eventOf(
+						'ILLEGAL_CHAR',
+						`${label} ${rawCode} 里含非数字字符「${extract.illegal}」，已拒绝。请核对标签后重扫（不会自动把字母换成数字）。`,
+						true
+					)
+				)
+				return
+			}
+			const code = extract.code
 			const issue = describeCodeIssue(code, expected)
 			if (issue) {
 				uni.showModal({ title: `${label}格式不对`, content: issue, showCancel: false })
@@ -648,15 +865,21 @@ export default {
 			uni.showModal({
 				title:
 					kind === 'box'
-						? `这是第 ${wizard.boxIndex} 箱的箱号吗？(${prefix}...)`
+						? `这是箱号吗？(${prefix}...)`
 						: `这是箱 ${wizard.boxIndex} 罐 ${wizard.canIndex} 号吗？(${prefix}...)`,
-				content: code,
-				confirmText: '是',
-				cancelText: '否',
+				content: kind === 'box' ? `第 ${wizard.boxIndex} 箱 / 共 ${wizard.totalBoxes} 箱\n${code}` : code,
+				confirmText: '正确',
+				cancelText: '不正确',
 				success: (res) => {
 					if (!res.confirm) {
-						this.event = eventOf('RETRY', `已放弃 ${code}，请重拍或重新输入${label}。`, false)
+						this.event = eventOf('RETRY', `已放弃 ${code}，请重新扫描${label}。`, false)
 						this.manualValue = ''
+						// 需求 2/4：点「不正确」直接重新调起摄像头，不用再点一次按钮。
+						// 延后一拍：弹窗还在收起时开相机会被吞掉（与 chainModal 同一个坑）。
+						setTimeout(() => {
+							if (kind === 'box') this.scanBox()
+							else this.scanCan()
+						}, 320)
 						return
 					}
 					this.commitLayerCode(code, kind)
@@ -694,6 +917,23 @@ export default {
 		/** 本罐核对：确认无误 / 还没好。 */
 		confirmCanDone() {
 			const wizard = this.wizard
+			// 防御性检查（需求 7）：正常流程里能进 CAN_REVIEW 就说明已扫满，
+			// 这条分支是给「以后新增了别的收尾路径」兜底的，不指望它天天触发。
+			const missing = this.currentCanPlanned - this.currentCanScanned
+			if (missing > 0) {
+				uni.showModal({
+					title: '本罐未填满',
+					content: `当前罐未填满（已扫 ${this.currentCanScanned} / 计划 ${this.currentCanPlanned}），确定要强制结束本罐采集吗？缺漏会在整体核对里如实显示。`,
+					confirmText: '强制结束',
+					cancelText: '继续扫',
+					success: (res) => {
+						if (!res.confirm) return
+						this.handle(confirmCanReview(this.batch, true))
+						this.afterCanConfirmed()
+					}
+				})
+				return
+			}
 			uni.showModal({
 				title: `箱 ${wizard.boxIndex} 罐 ${wizard.canIndex} 拍摄是否结束？`,
 				content: '请检查无误。',
@@ -1143,6 +1383,19 @@ export default {
 	background: #fdf3e5;
 	border: 1rpx solid #f0cfa0;
 	border-radius: 8rpx;
+}
+
+/* 需求 7：漏扫高亮警告条 —— 比普通 hint 更醒目，但颜色不是唯一线索（前面带 ⚠️ 与文字） */
+.underfill-warn {
+	display: block;
+	margin-top: 16rpx;
+	padding: 16rpx 20rpx;
+	font-size: 26rpx;
+	font-weight: 600;
+	color: #b45309;
+	background: #fdf3e5;
+	border: 2rpx solid #e0a458;
+	border-radius: 10rpx;
 }
 
 .step-row {

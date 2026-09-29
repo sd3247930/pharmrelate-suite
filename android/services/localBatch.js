@@ -51,8 +51,28 @@ export const CODE_PREFIXES = {
 
 export const LAYER_LABELS = { 3: '箱', 2: '罐', 1: '粒子' }
 
-export const MIN_BOXES = 1
+/**
+ * 界面允许的箱数下限。**0 是合法选择**，语义是「本次作业不扫箱号」。
+ * 落库时由 buildBoxes() 生成 1 个**虚拟箱**（boxCode = VIRTUAL_BOX_CODE），
+ * 这样罐的 parentCode 仍有合法指向、导出的 XML 不会变成空文件。
+ */
+export const MIN_BOXES = 0
 export const MAX_BOXES = 5
+
+/**
+ * 数据结构里至少要有 1 组罐。
+ * 「箱数 = 0」不改变数组长度 —— 它落库后就是「1 组罐 + 虚拟箱」，
+ * 所以数组长度的下限是这里，而不是 MIN_BOXES 的 0。
+ */
+export const MIN_STRUCTURE_GROUPS = 1
+
+/**
+ * 虚拟箱号：9 打头，与脱敏后的虚构码同一风格，一眼可辨是程序生成的，
+ * 不会与现场真实箱号混淆（真实序列号一律以 0 打头）。
+ * 不用 80217610000000000000 —— 那个号被后端 parentCode 完整性测试当作反例夹具占用了。
+ */
+export const VIRTUAL_BOX_CODE = '80217619999999999999'
+
 export const MIN_CANS = 1
 export const MAX_CANS = 5
 export const MIN_PARTICLES_PER_CAN = 1
@@ -362,6 +382,30 @@ export function cleanLayerCode(value, layer) {
 }
 
 /**
+ * 严格提取层级码（扫码 / 拍照 / 手输三条通道共用的入口）。
+ *
+ * **刻意不做 `replace(/\D/g, '')` 全剔。** 全剔会把
+ *   - `A8021761-0000014066041`（多了一个字母）
+ *   - `8O2176…`（字母 O 混进数字里）
+ * 静默洗成一个「看起来合法」的 20 位数字，从而把错码写进库。
+ * 这与本模块「不猜测、不补位」的口径冲突，所以只清**已知分隔符**（连字符），
+ * 剩下的非数字字符原样留着交给调用方报警。
+ *
+ * 返回 `{ code, illegal }`：
+ *   - `code`  = 清掉已知分隔符后的串（**未**改动其中的非法字符）
+ *   - `illegal` = 里面残留的非数字字符（去重后拼成的串）；非空 → 调用方必须报警，
+ *     不允许静默采用。
+ */
+export function extractDigits(value, layer) {
+	const code = cleanLayerCode(value, layer)
+	const seen = []
+	for (const ch of code) {
+		if (!/\d/.test(ch) && seen.indexOf(ch) < 0) seen.push(ch)
+	}
+	return { code, illegal: seen.join('') }
+}
+
+/**
  * 层级码格式校验（给「手动输入箱号/罐号」与三条采集通道共用）。
  * 返回空串表示通过；否则返回一句能直接给操作员看的中文提示。
  *
@@ -428,11 +472,16 @@ export function validateBaseInfo(input) {
  * 入参是**箱 → 罐**的二维数组，例如 `[[2, 2, 2], [1, 1]]`：
  *   箱数 1~5；每箱罐数各自独立 1~5；每罐 1~2500；单批总数 ≤ 12500（硬上限，方案 A）。
  */
-export function validateStructure(boxCounts) {
+export function validateStructure(boxCounts, options) {
 	const issues = []
 	const boxes = Array.isArray(boxCounts) ? boxCounts : []
-	if (boxes.length < MIN_BOXES || boxes.length > MAX_BOXES) {
+	const virtualBox = !!(options && options.virtualBox)
+	if (boxes.length < MIN_STRUCTURE_GROUPS || boxes.length > MAX_BOXES) {
 		issues.push(issue('BOX_COUNT_RANGE', 'boxes', `纸箱数必须在 ${MIN_BOXES}～${MAX_BOXES} 之间`))
+		return issues
+	}
+	if (virtualBox && boxes.length !== 1) {
+		issues.push(issue('VIRTUAL_BOX_SHAPE', 'boxes', '选了「箱数 0」时只能有一组罐（虚拟箱只会生成一个）。'))
 		return issues
 	}
 	let total = 0
@@ -579,35 +628,42 @@ export function updateBaseInfo(batch, input) {
 }
 
 /** 按「箱 → 罐」生成空白结构（每罐都是空槽位）。 */
-export function buildBoxes(boxCounts) {
-	return (Array.isArray(boxCounts) ? boxCounts : []).map((counts, boxIndex) => ({
-		boxIndex: boxIndex + 1,
-		boxCode: '',
-		reviewConfirmed: false,
-		cans: (Array.isArray(counts) ? counts : []).map((count, canIndex) => ({
-			canIndex: canIndex + 1,
-			canCode: '',
-			plannedParticleCount: Number(count),
-			confirmed: false,
-			particles: new Array(Number(count)).fill('')
-		}))
-	}))
+export function buildBoxes(boxCounts, options) {
+	const virtualBox = !!(options && options.virtualBox)
+	return (Array.isArray(boxCounts) ? boxCounts : []).map((counts, boxIndex) => {
+		const isVirtual = virtualBox && boxIndex === 0
+		return {
+			boxIndex: boxIndex + 1,
+			// 虚拟箱：箱号当场写好 → 向导自然跳过「拍箱号」，罐的 parentCode 也有合法指向
+			boxCode: isVirtual ? VIRTUAL_BOX_CODE : '',
+			virtual: isVirtual,
+			// 虚拟箱没有实物可核对，直接置真（与 migrateBatch 对老单箱数据的处理同一口径）
+			reviewConfirmed: isVirtual,
+			cans: (Array.isArray(counts) ? counts : []).map((count, canIndex) => ({
+				canIndex: canIndex + 1,
+				canCode: '',
+				plannedParticleCount: Number(count),
+				confirmed: false,
+				particles: new Array(Number(count)).fill('')
+			}))
+		}
+	})
 }
 
 /**
  * 保存包装结构 → 状态置「采集中」，返回新批次。
  * 已经在采集的批次不允许改结构（改了会让已扫的槽位失去意义）。
  */
-export function saveStructure(batch, boxCounts) {
+export function saveStructure(batch, boxCounts, options) {
 	if (batch.status !== LOCAL_STATUS.DRAFT) {
 		return { batch, issues: [], event: eventOf(EVENT.WRONG_STATE, '已经开始采集，包装结构不可再改。') }
 	}
-	const issues = validateStructure(boxCounts)
+	const issues = validateStructure(boxCounts, options)
 	if (issues.length) {
 		return { batch, issues, event: eventOf(EVENT.WRONG_STATE, issues[0].message) }
 	}
 	const next = clone(batch)
-	next.boxes = buildBoxes(boxCounts)
+	next.boxes = buildBoxes(boxCounts, options)
 	next.status = LOCAL_STATUS.COLLECTING
 	return { batch: touch(next), issues: [] }
 }
@@ -718,7 +774,10 @@ export function deriveWizard(batch) {
 				})
 			}
 			const filled = filledCount(can)
-			if (filled < can.plannedParticleCount) {
+			// 已确认的罐不再要求扫满：正常流程里 confirmed 本来就意味着已扫满，
+			// 只有 forceEndCan()（操作员在二次确认框里选了「强制结束」）才会出现
+			// 「已确认但未扫满」——那种罐的缺漏由整体核对如实显示，不在这里反复拦。
+			if (filled < can.plannedParticleCount && !can.confirmed) {
 				return wizardState(base, {
 					step: 2,
 					phase: PHASE.PARTICLE,
@@ -1011,6 +1070,39 @@ export function confirmCanReview(batch, done) {
 	const next = clone(batch)
 	next.boxes[wizard.boxIndex - 1].cans[wizard.canIndex - 1].confirmed = true
 	return { batch: touch(next), event: eventOf(EVENT.OK, `箱 ${wizard.boxIndex} 罐 ${wizard.canIndex} 已确认。`) }
+}
+
+/**
+ * 强制结束本罐：粒子**没扫满**时，操作员在二次确认框里点「强制结束」后调用。
+ *
+ * 与 confirmCanReview 的区别：后者只允许在 CAN_REVIEW 相位调用，而 CAN_REVIEW 是
+ * deriveWizard() 在「已扫满」之后才会推出的相位 —— 也就是说「没扫满就结束本罐」
+ * 在这条路径上根本走不到，扫漏了只能通过「结束整批」绕。这个函数补的就是这一格：
+ * 只在粒子相位可用，直接把本罐标记为已确认，缺漏留给整体核对如实显示
+ * （与「提前结束整批」同一口径，不做任何补齐、不猜测）。
+ */
+export function forceEndCan(batch) {
+	const wizard = deriveWizard(batch)
+	if (wizard.phase !== PHASE.PARTICLE) {
+		return { batch, event: eventOf(EVENT.WRONG_STATE, '当前不在粒子采集步骤，无法结束本罐。') }
+	}
+	const can = findCan(batch, wizard.boxIndex, wizard.canIndex)
+	if (!can) {
+		return { batch, event: eventOf(EVENT.WRONG_STATE, '找不到当前罐，无法结束本罐。') }
+	}
+	const filled = filledCount(can)
+	if (filled >= Number(can.plannedParticleCount)) {
+		return { batch, event: eventOf(EVENT.WRONG_STATE, '本罐已经扫满，请直接确认。') }
+	}
+	const next = clone(batch)
+	next.boxes[wizard.boxIndex - 1].cans[wizard.canIndex - 1].confirmed = true
+	return {
+		batch: touch(next),
+		event: eventOf(
+			EVENT.OK,
+			`箱 ${wizard.boxIndex} 罐 ${wizard.canIndex} 已强制结束（已扫 ${filled}/${can.plannedParticleCount}，缺漏会在整体核对里如实显示）。`
+		)
+	}
 }
 
 /** 本箱核对：确认无误 → 标记本箱完成，向导进入下一箱；还没好 → 留在本箱。 */
