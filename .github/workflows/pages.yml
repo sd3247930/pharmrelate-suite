@@ -72,6 +72,10 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
+        with:
+          # 新仓库（或重建后的仓库）默认没有 Pages 站点，
+          # 不开这个开关第一次部署会直接失败在 "Get Pages site failed"。
+          enablement: true
 
       - name: Upload web/ as Pages artifact
         uses: actions/upload-pages-artifact@v5

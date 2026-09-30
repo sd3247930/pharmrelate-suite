@@ -143,7 +143,25 @@ if ($buildTools) {
 
     # HBuilderX 未读取 manifest 图标时仍会产出可安装 APK，但会悄悄退回绿色 H 默认图标。
     # 发布前逐档比较 APK 内 launcher icon 与仓库母版产物，杜绝错误资源上线。
+    #
+    # 注意：DCloud 云打包现在会做**资源混淆改名**，图标不再固定在
+    # `res/drawable-<density>/icon.png`（实测 2026-09-30 的产物里是 `res/yj.png`、
+    # `res/2H.png` 这种两字符名，`res/drawable*` 条目数为 0）。
+    # 所以改成从 aapt2 的 badging 里读**真实图标路径**，再逐档比对字节 ——
+    # 路径会变，但图标字节与仓库母版一致这件事必须继续成立。
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $iconDpi = [ordered]@{
+        'ldpi'    = 120
+        'mdpi'    = 160
+        'hdpi'    = 240
+        'xhdpi'   = 320
+        'xxhdpi'  = 480
+        'xxxhdpi' = 640
+    }
+    $badgingIcon = @{}
+    foreach ($m in [regex]::Matches($badging, "application-icon-(\d+):'([^']+)'")) {
+        $badgingIcon[[int]$m.Groups[1].Value] = $m.Groups[2].Value
+    }
     $iconSpecs = [ordered]@{
         'ldpi'    = 'app-icon-round-ldpi-48.png'
         'mdpi'    = 'app-icon-round-mdpi-48.png'
@@ -155,7 +173,11 @@ if ($buildTools) {
     $archive = [System.IO.Compression.ZipFile]::OpenRead($ApkPath)
     try {
         foreach ($density in $iconSpecs.Keys) {
-            $entryName = "res/drawable-$density/icon.png"
+            $dpi = $iconDpi[$density]
+            $entryName = $badgingIcon[$dpi]
+            if (-not $entryName) {
+                Fail "aapt2 没报出 $density（$dpi dpi）档启动图标（可能回退为 HBuilder 默认图标）"
+            }
             $entry = $archive.GetEntry($entryName)
             if (-not $entry) { Fail "APK 缺少启动图标：$entryName（可能回退为 HBuilder 默认图标）" }
 
