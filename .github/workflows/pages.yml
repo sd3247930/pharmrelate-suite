@@ -2,7 +2,7 @@ name: Deploy mobile web station
 
 # 手机端分发站：把仓库里的 web/ 目录原样发布到 GitHub Pages。
 # 站点源留在 main 树里（可 review、可回溯），不使用孤儿分支。
-# 发布地址：https://sd3247930.github.io/PharmRelate-Multi/
+# 发布地址：https://sd3247930.github.io/pharmrelate-suite/
 on:
   push:
     branches: [main]
@@ -36,7 +36,7 @@ jobs:
       - name: Verify install entry before publishing
         run: |
           set -e
-          FIXED_URL="https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/PharmRelate-Multi-Capture.apk"
+          FIXED_URL="https://github.com/sd3247930/pharmrelate-suite/releases/latest/download/PharmRelate-Multi-Capture.apk"
           test -f web/index.html
           test -f web/apk.json
           grep -q 'id="installBtn"' web/index.html || { echo "::error::缺少「📲 安装」入口"; exit 1; }

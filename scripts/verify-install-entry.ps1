@@ -24,7 +24,7 @@
 
 param(
     [switch]$SkipOnline,
-    [string]$SiteUrl = 'https://sd3247930.github.io/PharmRelate-Multi/'
+    [string]$SiteUrl = 'https://sd3247930.github.io/pharmrelate-suite/'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -38,7 +38,7 @@ $apkJsonPath = Join-Path $webDir 'apk.json'
 $pwaJsonPath = Join-Path $webDir 'manifest.json'
 
 $fixedAssetName = 'PharmRelate-Multi-Capture.apk'
-$fixedUrl = "https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/$fixedAssetName"
+$fixedUrl = "https://github.com/sd3247930/pharmrelate-suite/releases/latest/download/$fixedAssetName"
 $logoAssets = @(
     'app-logo-round-192-v2.png',
     'app-logo-round-512-v2.png',

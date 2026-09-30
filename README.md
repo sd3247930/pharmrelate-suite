@@ -3,10 +3,10 @@
 跨平台三级包装（箱 → 罐 → 粒子）关联管理系统。
 
 <p align="right">
-  <a href="https://sd3247930.github.io/PharmRelate-Multi/?install=1"><strong>📲 安装</strong></a>
+  <a href="https://sd3247930.github.io/pharmrelate-suite/?install=1"><strong>📲 安装</strong></a>
 </p>
 
-Android（手机）直接打开 <https://sd3247930.github.io/PharmRelate-Multi/>，
+Android（手机）直接打开 <https://sd3247930.github.io/pharmrelate-suite/>，
 点右上角 **「📲 安装」** 就能下载独立 APK：桌面有独立图标、打开无地址栏、断网可用。
 上面右上角的「📲 安装」直达安装面板。
 

@@ -11,7 +11,7 @@
   'use strict';
 
   var DOWNLOAD_URL =
-    'https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/PharmRelate-Multi-Capture.apk';
+    'https://github.com/sd3247930/pharmrelate-suite/releases/latest/download/PharmRelate-Multi-Capture.apk';
   var APK_NAME = 'PharmRelate-Multi-Capture.apk';
 
   var root = document.documentElement;

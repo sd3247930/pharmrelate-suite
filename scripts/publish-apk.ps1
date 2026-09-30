@@ -11,7 +11,7 @@
       5. 回写 web/apk.json（版本 / 大小 / SHA256 / 日期），提交并推送。
 
     固定资产名是这套机制的关键：网页主按钮指向
-    https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/PharmRelate-Multi-Capture.apk
+    https://github.com/sd3247930/pharmrelate-suite/releases/latest/download/PharmRelate-Multi-Capture.apk
     releases/latest 永远指向最新版，所以升版只需要换资产，网页一行都不用改。
 
 .EXAMPLE
@@ -49,7 +49,7 @@ $apkJsonPath = Join-Path $root 'web\apk.json'
 $fixedAssetName = 'PharmRelate-Multi-Capture.apk'
 $expectedPackage = 'com.pharmrelate.multi.capture'
 $expectedLabel = '籽关通'
-$downloadUrl = "https://github.com/sd3247930/PharmRelate-Multi/releases/latest/download/$fixedAssetName"
+$downloadUrl = "https://github.com/sd3247930/pharmrelate-suite/releases/latest/download/$fixedAssetName"
 $hbuilderApkDir = if ($HbuilderApkDir) {
     $HbuilderApkDir
 } elseif ($env:PHARMRELATE_HBUILDER_APK_DIR) {
@@ -228,12 +228,12 @@ $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh) { Fail '找不到 gh CLI（https://cli.github.com/），或改成在网页上手动上传资产' }
 
 $releaseExists = (Invoke-Native -Exe $gh -Arguments @(
-        'release', 'view', $Tag, '--repo', 'sd3247930/PharmRelate-Multi') -Capture).Code -eq 0
+        'release', 'view', $Tag, '--repo', 'sd3247930/pharmrelate-suite') -Capture).Code -eq 0
 
 if ($releaseExists) {
     Write-Host "Release $Tag 已存在，改为覆盖上传资产（--clobber）"
     $result = Invoke-Native -Exe $gh -Arguments @(
-        'release', 'upload', $Tag, $stagedApk, $shaFile, '--repo', 'sd3247930/PharmRelate-Multi', '--clobber')
+        'release', 'upload', $Tag, $stagedApk, $shaFile, '--repo', 'sd3247930/pharmrelate-suite', '--clobber')
 } else {
     $notes = @"
 手机采集端（uni-app）Android 安装包。
@@ -248,7 +248,7 @@ $downloadUrl
 "@
     $result = Invoke-Native -Exe $gh -Arguments @(
         'release', 'create', $Tag, $stagedApk, $shaFile,
-        '--repo', 'sd3247930/PharmRelate-Multi',
+        '--repo', 'sd3247930/pharmrelate-suite',
         '--title', "手机采集端 $versionName", '--notes', $notes)
 }
 if ($result.Code -ne 0) { Fail "gh release 执行失败（退出码 $($result.Code)）" }
@@ -291,5 +291,5 @@ try {
 }
 
 Write-Host "`n发布完成。把这条链接发到手机上验收：" -ForegroundColor Green
-Write-Host "  https://sd3247930.github.io/PharmRelate-Multi/?install=1" -ForegroundColor Green
+Write-Host "  https://sd3247930.github.io/pharmrelate-suite/?install=1" -ForegroundColor Green
 Write-Host "  直链：$downloadUrl" -ForegroundColor Green
