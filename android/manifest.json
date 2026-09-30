@@ -4,8 +4,8 @@
     /* appid 由 HBuilderX 在本机创建同名工程时获取，已随工程迁入本目录，可直接运行到 App 基座。
        若需换绑到其他 DCloud 账号，打开 manifest.json 可视化界面点「重新获取 appid」即可。 */
     "description" : "籽关通 (PharmRelate Multi) 移动采集端",
-    "versionName" : "1.4.0",
-    "versionCode" : "140",
+    "versionName" : "1.4.1",
+    "versionCode" : "141",
     "transformPx" : false,
     /* 5+App特有相关 */
     "app-plus" : {

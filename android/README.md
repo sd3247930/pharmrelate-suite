@@ -1,4 +1,4 @@
-# 籽关通 Android 采集端（uni-app）· v1.4.0
+# 籽关通 Android 采集端（uni-app）· v1.4.1
 
 > 路线：HBuilderX + uni-app（**不是 Capacitor**）
 > 状态：**多箱包装结构 · 本地驱动 · 引导式 · 离线可用 · 箱号扫条码 / 罐号扫二维码**
@@ -270,24 +270,42 @@ v1.3.2 的「箱/罐 = 短号 1~9999」口径已**彻底作废**（现场实物�
 
 ## 三之四、批量连续扫码 · 虚拟箱 · 去重（并入 v1.4.0）
 
-### 3.4.1 批量连续扫码（`plus.barcode`）
+### 3.4.1 批量连续扫码（`plus.barcode`）—— 启动链收在 `utils/batchBarcodeScanner.js`
 
-粒子环节新增「**批量连续扫码**」。为什么不能沿用 `uni.scanCode`：它是「一次调一个码」的
-系统扫码界面，扫 A4 纸上几十个竖向条码要反复开合，效率不可接受。
+粒子环节的「**批量连续扫码**」用 `plus.barcode` 常驻原生控件连续取景。为什么不能沿用
+`uni.scanCode`：它是「一次调一个码」的系统扫码界面，扫一页几十个竖向条码要反复开合。
 
-改用 `plus.barcode.create()` 在当前 webview 里挂一个常驻原生扫码视图：
+**这一版为什么重写启动链**：旧实现只 `start()` 一次，`onmarked` 回来之后**从不重新
+`start()`** —— 第一枚码扫完扫码头就停了，「连续扫码」实际只能扫一枚。现在按官方语义
+（HBuilderX 内置 `plus.d.ts` + html5plus barcode 文档）重写：
 
-- `onmarked` 每识别到一个码就回调一次，可以连续扫；
-- 码制过滤器：`CODE128 / CODE39 / CODE93 / EAN13 / EAN8`；
-- **资源释放有四条出口**，每条都会走 `stopBatchScan()` 调 `cancel()` + `close()`：
-  ① 点「完成扫码」；② 切到其它 Tab（`onHide`）；③ 离开页面（`onUnload`）；
-  ④ 相位离开粒子采集（`reload()` 里判断）。
-  这是本模块唯一会常驻占用摄像头的功能，漏一条就会留下一个关不掉的黑框。
+| 环节 | 现在的做法 |
+| --- | --- |
+| 挂载 | `plus.barcode.create(id, filters, styles, autoDecodeCharset)` **不会自动显示**，必须再 `Webview.append(barcode)` 才挂得上；两步都在 `utils/batchBarcodeScanner.js`，页面不直接碰 `plus.barcode` |
+| 连续 | `start → onmarked → 业务处理 → 按结果等 60/120/200ms → start → …`，由 `scheduleNextScan()` 统一调度。**Barcode 只 create 一次、append 一次，之后反复 start**；`finally` 保证业务失败（格式错 / 重复 / 跨罐报警）也不停摄像头 |
+| 停止 | `cancel()` 停摄像头（之后可再 `start()`）、`close()` 释放控件（之后对象不可用）；四个出口统一走 `cancel + close`：① 点「完成扫码」② 切 Tab（`onHide`）③ 离开页面（`onUnload`）④ 相位离开粒子采集（`reload()`） |
+| 状态机 | `idle / starting / scanning / processing / stopping / error`，状态直接显示在面板上；狂点按钮只会被 `ALREADY_RUNNING` 挡回，**不会创建第二个控件** |
+| 布局 | 原生控件按页面「留位卡片」`#batch-scan-slot` 的**实测矩形**挂载（`position:'static'`，随页面滚动），不覆盖下方按钮，按钮照常可点 |
+| 异常 | 初始化失败不改业务模式：卡片里显示原因 + 「🔄 重新启动扫码」（内部 `stop → create → append → start`，不复用已 close 的对象），`onerror` 全程记日志 |
+| 权限 | 起扫码前先申请 CAMERA，被拒时给「去系统设置」引导（与单码扫码共用 `ensureCamera()`） |
+| 码制 | **只配 `CODE128`** —— 阶段 D 用 zxing-cpp 解码实拍标签取证：`15-箱码` / `17·18·19-条形码` 全是 Code 128，`16-罐码` 是二维码（罐号走 `uni.scanCode`）。换码制只改 `DEFAULT_FILTER_NAMES` 一行 |
+| 去重 | 三层：瞬时防抖 2.5 秒（扫码器层，静默）→ 本罐会话去重（短震 + Toast）→ 跨罐/跨箱报警（长震 + 弹窗）。详见 §3.4.3 |
+| 盲区 | **每一枚码都会让摄像头停一下再重启**，这段空窗期就是漏扫的来源。所以按结果分档：入库 200ms / 业务拒绝 120ms / 瞬时忽略 60ms（`RESTART_DELAY_*_MS`），能少等的绝不多等 |
+| 提示音 | 面板上有「🔔 提示音开 / 🔕 提示音关」按钮，随时可关（只留震动），设置落盘、下一轮识别即生效 |
+| 版式 | 提示音按钮与「扫描中」徽标同款几何（同高 23.7px、同圆角 999px、同 12px 字号、同 2px 10px 内边距），实测上下差 0px；注意别再用 `button.ghost`（它的 `margin-top:16rpx` 会把按钮顶歪） |
+| 日志 | 全程 `[BatchScan]` 前缀：`creating barcode / barcode created / barcode appended / barcode started / marked / restart scanning / destroyed` |
 
-**降级路径**：`plus.barcode` 起不来时（原生容器/ROM 差异）界面会明确提示，
-并保留「单次扫码一个」与「手动输入」两条通道。**本项目没有 OCR 引擎**
-（实测：`plus.barcode` 无 `scanImage`、`plus` 无任何 ocr/ai/ml/vision 命名空间），
-所以降级只能是「拍照 → 人眼读数 → 手动输入」，**不存在「在照片上点击识别」这种能力**。
+面板常驻一行**五维运行统计**：
+`识别 N 枚 · 自动重启 N 次 · 同码瞬时忽略 N 次 · 业务重复 N 次 · 异常 N 次`，
+有非法字符或其它拒绝时再补两项，另外带平均每枚间隔。现场一眼能判断「摄像头还在不在跑」，
+收工时还会把整轮统计（含**逐枚耗时 `intervalMs` 数组**）落盘到
+`pharmrelate.batchscan.lastRun` —— HBuilderX 基座的 console 在电脑上读不到，
+真机压测的数据只能靠这条路径带出来。
+
+**降级口径（没变）**：`plus.barcode` 起不来时界面明确提示，并保留「单次扫码一个」与
+「手动输入」两条通道。**本项目没有 OCR 引擎**（实测：`plus.barcode` 无 `scanImage`、
+`plus` 无任何 ocr/ai/ml/vision 命名空间），所以降级只能是「拍照 → 人眼读数 → 手动输入」，
+**不存在「在照片上点击识别」这种能力**。
 
 ### 3.4.2 虚拟箱（箱数 = 0）
 
@@ -312,13 +330,19 @@ v1.3.2 的「箱/罐 = 短号 1~9999」口径已**彻底作废**（现场实物�
 
 ### 3.4.3 去重规则（折中方案）
 
-连续扫码每次收到码都会过三道闸，**区分「真重复」与「扫错罐」**：
+连续扫码每次收到码都会过**三层闸**，**区分「镜头里的重复」与「真重复 / 扫错罐」**，
+三层反馈强度刻意不同（2026-09-30 压测后定稿）：
 
-| 情形 | 处理 |
-| --- | --- |
-| 含非数字字符（字母 O 混入等） | **报警拒绝**，绝不 `\D` 全剔 |
-| **本次连续扫码会话内**刚扫过的码 | `vibrateLong` + Toast「重复条码已自动忽略」，**静默忽略、不写库** |
-| 跨罐 / 跨箱已存在 | 交给 `applyCodes` **报警** + 弹窗要求核对（可能是扫到了别的罐的标签） |
+| 层 | 情形 | 处理 |
+| --- | --- | --- |
+| 1 · 瞬时防抖（扫码器层，`INSTANT_DEBOUNCE_MS = 2500`） | 同一条码在 2.5 秒内被重复解码（码还在镜头里） | **完全静默**：不震动、不 Toast、不写库；只累加 `rejectReasons.instantIgnore` |
+| 2 · 本罐去重（页面层 `sessionScanned` Set） | 本次会话内已经扫过的码 | **短震动** `vibrateShort({type:'light'})` + Toast「本次已扫过，重复码忽略」，不写库 |
+| 3 · 跨罐 / 跨箱（数据层 `applyCodes`） | 该码在本批次的别的罐/箱里已存在 | 长震动 + **弹窗要求核对**（可能是扫到了别的罐的标签） |
+| 附带 | 含非数字字符（字母 O 混入等） | **报警拒绝**，绝不 `\D` 全剔 |
+
+> 窗口为什么是 2500ms：54 枚标签压测跑了 196 次识别，其中 80 次是「1.2 秒内同码重复」、
+> 62 次是「超过 1.2 秒后同码又进业务层」——那 62 次全是同一枚标签在镜头里多停了一会儿。
+> 放宽到 2.5 秒把这类噪声吸收在扫码器层，第 2、3 层继续兜底，**合法新码一枚都不会少**。
 
 会话集合用 `Set`，挂在组件实例上（不进 `data`，不需要 Vue 建响应式）。
 换箱 / 换罐 / 换相位会清空它——否则跨罐的真码会被误判成「会话内重复」而静默吞掉。
@@ -378,7 +402,13 @@ android/
 │   ├── api.js             二期同步用的 /api/scan/* 客户端（本期不阻塞）
 │   ├── ws.js              uni.connectSocket 封装（二期）
 │   └── store.js           服务地址、设备指纹
-├── tests/localBatch.test.mjs  本地数据层单测（183 项）
+├── utils/
+│   └── batchBarcodeScanner.js  ★ 批量连续扫码启动链（create/append/start 循环、状态机、瞬时防抖、释放）
+├── tests/
+│   ├── localBatch.test.mjs          本地数据层单测
+│   ├── batchBarcodeScanner.test.mjs 扫码启动链单测（假 plus 驱动，PC 上就能验状态机与重启）
+│   ├── numberRecognizer.test.mjs    识别契约层单测
+│   └── xmlGenerator.test.mjs        XML 生成器单测（与后端黄金基准字节级比对）
 └── unpackage/             构建产物（已 gitignore）
 ```
 
@@ -411,9 +441,11 @@ powershell -ExecutionPolicy Bypass -File scripts\serve-lan.ps1
 ## 七、测试与验收证据
 
 ```powershell
-# 单测共 373 项：本地数据层 250 + 识别契约层 66 + XML 生成器 57（Node 直跑，无需 HBuilderX）
+# 单测共 474 项：本地数据层 250 + 识别契约层 66 + XML 生成器 57 + 扫码启动链 101
+# （Node 直跑，无需 HBuilderX；扫码启动链用假 plus + 假定时器驱动，真机只验摄像头行为）
 cd "<ANDROID_PROJECT_DIR>"
 node tests/localBatch.test.mjs
+node tests/batchBarcodeScanner.test.mjs
 ```
 
 H5 / 真机端到端脚本与截图在
@@ -598,4 +630,38 @@ H5 / 真机端到端脚本与截图在
 - [x] 箱数/罐数由步进器改为 `picker` 下拉
 - [x] 单测 373 项全过（localBatch 250 + numberRecognizer 66 + xmlGenerator 57）
 - [x] `check.ps1 -Full` 13/13 全过（后端与电脑端一行未改）
-- [ ] 真机验证：批量连续扫码（先试扫 10 个码测耗时）/ 虚拟箱导出 XML / 漏扫警告 —— 待现场取证
+- [x] 真机验证：虚拟箱导出 XML / 漏扫警告（v1.3.1 起逐版取证）
+- [ ] 真机验证：批量连续扫码连续扫 ≥20 枚（见下一节，待现场取证）
+
+### 批量连续扫码启动链重构（2026-09-30）
+
+- [x] 启动链收进 `utils/batchBarcodeScanner.js`：页面只注入「权限 / Webview / 业务处理 / 状态回调」
+- [x] 修复「只扫一枚」：`onmarked` 处理完统一 `scheduleNextScan()` 重新 `start()`；
+      **一次 create、一次 append、多次 start**
+- [x] 删除无效参数 `start({ conceal: true })`（官方 `BarcodeOptions` 只有 `conserve/filename/vibrate/sound`）
+- [x] 六个状态：`idle / starting / scanning / processing / stopping / error`，重入按 `ALREADY_RUNNING` 挡回
+- [x] 瞬时防抖（同码停镜头不刷屏）→ 与「本罐去重 / 跨罐报警」组成三层去重；
+      窗口 1.2 秒 → **2.5 秒**（`INSTANT_DEBOUNCE_MS`，2026-09-30 压测后拍板）
+- [x] 业务校验失败不停摄像头（`finally` 里恢复下一轮识别）
+- [x] 页面留位卡片 `#batch-scan-slot` + 实测矩形挂载：原生控件不再吃掉按钮的触摸事件
+- [x] 「🔄 重新启动扫码」入口 + 面板常驻运行统计（识别 / 自动重启 / 瞬时重复）
+- [x] 相机权限前置（被拒给「去系统设置」引导），`onerror` 全程日志
+- [x] 码制按实据收窄为 `CODE128`（zxing-cpp 解码实拍标签取证，见 §3.4.1）
+- [x] 单测 467 项全过（扫码启动链 94 项：状态机 / 重启 / 防抖 2.5s / 重入 / 释放 / 权限异常 /
+      五维统计四桶归类 / 逐枚耗时 / 收工落盘）
+- [x] 真机链路自检通过（`private/测试输出/Android-v1.4.1-批量连续扫码-20260930/`）：
+      启动后相机被本应用占用、狂点按钮不炸、完成扫码即释放、切 Tab（onHide）即释放、再次进入能重启
+- [x] 真机人肉连续扫码（2026-09-30 现场）：**一个会话连扫 54 枚真标签**，
+      `onmarked` 196 次 / 自动重启 196 次（1:1，零失败）/ 瞬时重复 80 次 /
+      54 枚全部唯一入库、格式全对、无一枚重复写库；无 ERROR、无崩溃；
+      证据：`private/测试输出/Android-v1.4.1-批量连续扫码-20260930/压测报告-54枚.md`
+- [x] 压测暴露的两个问题当场修掉：重复码反馈由长震动改短震动；统计行扩为
+      `识别 / 自动重启 / 同码瞬时忽略 / 业务重复 / 异常` 五项
+- [x] 漏扫主因修复：重启盲区按结果分档（入库 200ms / 业务拒绝 120ms / 瞬时忽略 60ms）
+- [x] 扫码提示音可取消：面板按钮开关 + 落盘，震动反馈保留
+- [x] 统计行补「扫错层 N 次」（`WRONG_LAYER`：把箱码/罐码扫进了粒子环节）
+- [x] `rejectReasons` 按四个桶归类：`instantIgnore / businessDuplicate / invalidChar / unknown`
+      （原始原因码另存 `rejectReasonCodes`，诊断用）
+- [x] 逐枚耗时采集：记录每枚**成功入库**的时间戳，收工时连同 `intervalMs` 数组落盘
+      `pharmrelate.batchscan.lastRun`，压测脚本用 `--read-only` 直接读出来出报告
+- [ ] 防抖放宽到 2.5 秒后的真机复跑（54 枚标签，目标：业务重复 <10 次、无丢码、平均间隔 ≤5 秒）

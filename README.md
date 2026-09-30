@@ -10,12 +10,12 @@ Android（手机）直接打开 <https://sd3247930.github.io/pharmrelate-suite/>
 点右上角 **「📲 安装」** 就能下载独立 APK：桌面有独立图标、打开无地址栏、断网可用。
 上面右上角的「📲 安装」直达安装面板。
 
-**当前状态（2026-09-28）**
+**当前状态（2026-10-01）**
 
 | 端 | 状态 |
 | --- | --- |
 | Windows 主控机 | 一期单机闭环**已完成**：基准冻结 → 工程骨架/设计系统 → 数据持久化与批次状态机 → 扫码采集 → 预览与导出 → 验收 |
-| Android 采集端（uni-app） | **v1.4.0 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；**箱号扫一维条形码 / 罐号扫方形二维码**（20 位追溯码 + 前缀校验、连字符自动清洗）；本机 XML 生成与 HTML 导出；识别契约层 + 人工确认降级 |
+| Android 采集端（uni-app） | **v1.4.1 已完成**：本地驱动 · 引导式 · 离线可用；多箱包装结构；**箱号扫一维条形码 / 罐号扫方形二维码**（20 位追溯码 + 前缀校验、连字符自动清洗）；**批量连续扫码启动链重构**（一次 create / 每识别一枚重新 start / 三层去重（瞬时防抖 2.5s）/ 重启盲区按结果分档 200·120·60ms / 提示音可关 / 切 Tab 即释放摄像头）；本机 XML 生成与 HTML 导出；识别契约层 + 人工确认降级 |
 | 手机网页版 / APK 分发 | **已上线**：GitHub Pages 分发站 + 固定资产名 APK 直链（首次发布 `v1.3.5`），一条命令发版（`scripts\publish-apk.ps1`） |
 
 一条命令跑完全部检查（后端 + 前端 + 桌面壳 + Android 静态检查）：
@@ -72,7 +72,8 @@ android/                   Android 采集端（uni-app / HBuilderX）
   services/localBatch.js   ★ 本地数据层（多箱结构 / 状态机 / 槽位 / 撤销 / 核对 / 老数据迁移）
   services/xmlGenerator.js ★ 本机 XML 生成（与后端 xml_builder.py 字节级一致）
   services/numberRecognizer.js  追溯码视觉识别契约层（可插拔 Provider + 人工确认降级）
-  tests/                   Node 单测（本地数据层 223 + XML 50 + 识别契约 59）
+  utils/batchBarcodeScanner.js  ★ 批量连续扫码启动链（create/append/start 循环 · 状态机 · 三层去重 · 盲区分档）
+  tests/                   Node 单测（本地数据层 250 + XML 57 + 识别契约 66 + 扫码启动链 101 = 474）
 ```
 
 ## 快速开始
@@ -229,9 +230,10 @@ cd backend
 
 ```powershell
 cd android
-node tests\localBatch.test.mjs       # 本地数据层 225 项
-node tests\xmlGenerator.test.mjs     # XML 生成器 50 项（含与后端基准逐字节比对）
-node tests\numberRecognizer.test.mjs # 识别契约层 66 项
+node tests\localBatch.test.mjs           # 本地数据层 250 项
+node tests\xmlGenerator.test.mjs         # XML 生成器 57 项（含与后端基准逐字节比对）
+node tests\numberRecognizer.test.mjs     # 识别契约层 66 项
+node tests\batchBarcodeScanner.test.mjs  # 批量连续扫码启动链 101 项（假 plus 驱动，PC 上就能验）
 ```
 
 真机端到端脚本与截图证据在 `private\测试输出\`（该目录不入库，可重跑生成）。

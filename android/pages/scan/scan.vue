@@ -1,5 +1,31 @@
 <template>
 	<view class="page">
+		<!--
+			批量连续扫码（plus.barcode 原生控件）：这一张卡片就是给原生控件「留位」的。
+			原生控件由 pages/scan 通过 utils/batchBarcodeScanner.js 挂到 App Webview 上，
+			位置按这张卡片实测出来的矩形来定（position: static，随页面滚动），
+			所以它不会盖住下面的按钮 —— 按钮照常可以点。
+		-->
+		<view v-if="batchPanelOpen" class="card batch-scan-card">
+			<view class="row-between">
+				<text class="card-title">批量连续扫码</text>
+				<view class="batch-scan-head">
+					<text :class="['badge', batchScanBadgeClass]">{{ batchScannerStateLabel }}</text>
+					<button class="batch-scan-sound" @click="toggleScanSound">
+						{{ scanSoundOn ? '🔔 提示音开' : '🔕 提示音关' }}
+					</button>
+				</view>
+			</view>
+			<view id="batch-scan-slot" class="batch-scan-slot">
+				<text class="batch-scan-slot-hint">{{ batchScanSlotHint }}</text>
+			</view>
+			<text class="hint">
+				对准条码逐个扫入：重复码自动忽略，跨罐重复会报警；扫完点下面「✅ 完成扫码」。
+				取景卡住时点「🔄 重新启动扫码」，不必退出本罐。
+			</text>
+			<text v-if="batchScanStatsText" class="hint">{{ batchScanStatsText }}</text>
+		</view>
+
 		<!-- 顶部：当前任务（数据全部来自本机，断网也在） -->
 		<view class="card">
 			<view class="row-between">
@@ -121,9 +147,12 @@
 				</view>
 			</view>
 			<view v-else-if="wizard.phase === 'particle'" class="actions">
-				<template v-if="batchScanning">
+				<template v-if="batchPanelOpen">
 					<button class="primary scan-btn" :disabled="busy" @click="stopBatchScan(false)">
 						✅ 完成扫码（已扫 {{ currentCanScanned }}/{{ currentCanPlanned }}）
+					</button>
+					<button class="secondary" :disabled="busy" @click="restartBatchScan">
+						🔄 重新启动扫码
 					</button>
 				</template>
 				<template v-else>
@@ -316,6 +345,14 @@ import {
 	transition,
 	undo
 } from '../../services/localBatch'
+import { createBatchBarcodeScanner, getCurrentAppWebview } from '../../utils/batchBarcodeScanner'
+
+/**
+ * 批量连续扫码的重启延迟不再由页面指定：盲区大小按识别结果分档，统一在
+ * utils/batchBarcodeScanner.js 里（入库 200ms / 业务拒绝 120ms / 瞬时忽略 60ms）。
+ * 页面只负责把「提示音开关」这类反馈设置喂给扫码器。
+ */
+const STORAGE_SCAN_SOUND = 'pharmrelate.scan.sound'
 
 /** 页面自有事件码的中文标题（数据层那套 EVENT_LABELS 之外的部分）。 */
 const LOCAL_EVENT_LABELS = {
@@ -378,7 +415,16 @@ export default {
 			localId: '',
 			// 批量连续扫码（plus.barcode）：非空表示原生扫码视图正在跑
 			batchScanner: null,
-			batchScanning: false,
+			// 面板是否展开：留位卡片与原生控件的位置都来自它
+			batchPanelOpen: false,
+			// 状态机当前状态（由 utils/batchBarcodeScanner.js 回调写入，界面只做展示）
+			batchScannerState: '',
+			// 最近一次初始化 / 运行失败的说明；非空时卡片里显示并允许「重新启动扫码」
+			batchScanError: '',
+			// 扫码器运行统计（识别 / 重启 / 瞬时重复），用于现场判断「摄像头还在不在跑」
+			batchScanStats: null,
+			// 扫码提示音开关（关掉后只留震动）：默认开，设置落盘，下次进来沿用
+			scanSoundOn: true,
 			// 会话去重用的 key（箱-罐-相位）。换罐时会清掉 Set。
 			sessionScanKey: ''
 		}
@@ -436,6 +482,56 @@ export default {
 			const missing = this.currentCanPlanned - this.currentCanScanned
 			if (missing <= 0) return ''
 			return `⚠️ 可能漏扫：当前已扫 ${this.currentCanScanned} 个，还差 ${missing} 个未扫描`
+			},
+			/** 扫码器状态的中文标签（状态机原值在 batchScannerState 里）。 */
+			batchScannerStateLabel() {
+				const labels = {
+					idle: '未启动',
+					starting: '启动中',
+					scanning: '扫描中',
+					processing: '处理中',
+					stopping: '正在停止',
+					error: '异常'
+				}
+				return labels[this.batchScannerState] || '待启动'
+			},
+			/** 状态徽标的颜色：扫描中=绿、处理中=蓝、异常=橙、其余=灰。 */
+			batchScanBadgeClass() {
+				if (this.batchScannerState === 'scanning') return 'badge-ok'
+				if (this.batchScannerState === 'processing') return 'badge-info'
+				if (this.batchScannerState === 'error') return 'badge-warn'
+				return 'badge-neutral'
+			},
+			/** 取景区里的提示文字：失败时显示原因，正常时显示占位说明。 */
+			batchScanSlotHint() {
+				if (this.batchScanError) return this.batchScanError
+				if (this.batchScannerState === 'processing') return '已识别到一枚，正在写入…'
+				return '原生扫码取景区（plus.barcode）：对准条码即可，无需反复点按钮'
+			},
+			/**
+			 * 扫码器统计（现场判断摄像头是否还在跑、重复码有多少）：
+			 * 五维口径：识别 / 自动重启 / 同码瞬时忽略 / 业务重复 / 异常，
+			 * 有非法字符或其它拒绝时再补两项，另外带平均每枚间隔。
+			 * 这批数字就是压测口径：识别→重启应始终 1:1，异常必须为 0。
+			 */
+			batchScanStatsText() {
+				const stats = this.batchScanStats
+				if (!stats) return ''
+				const reasons = stats.rejectReasons || {}
+				const parts = [
+					`识别 ${stats.markedCount} 枚`,
+					`自动重启 ${stats.restartCount} 次`,
+					`同码瞬时忽略 ${reasons.instantIgnore || 0} 次`,
+					`业务重复 ${reasons.businessDuplicate || 0} 次`,
+					`异常 ${stats.errorCount} 次`
+				]
+				if (reasons.invalidChar) parts.push(`非法字符 ${reasons.invalidChar} 次`)
+				const codes = stats.rejectReasonCodes || {}
+				if (codes.WRONG_LAYER) parts.push(`扫错层 ${codes.WRONG_LAYER} 次`)
+				if (reasons.unknown) parts.push(`其它拒绝 ${reasons.unknown} 次`)
+				const timing = stats.timing
+				if (timing && timing.avgMs) parts.push(`平均 ${(timing.avgMs / 1000).toFixed(1)} 秒/枚`)
+				return parts.join(' · ')
 		}
 	},
 
@@ -445,6 +541,13 @@ export default {
 	 */
 	created() {
 		this.sessionScanned = new Set()
+		// 提示音开关沿用上次的选择（现场普遍嫌每枚都响；关掉后还有震动反馈）
+		try {
+			const saved = uni.getStorageSync(STORAGE_SCAN_SOUND)
+			if (saved === false || saved === 'false') this.scanSoundOn = false
+		} catch (error) {
+			// 读不到就用默认值（开）
+		}
 	},
 
 	onShow() {
@@ -662,84 +765,197 @@ export default {
 		 * 资源释放：退出方式有四条 —— 点「完成扫码」、切 Tab（onHide）、离开页面（onUnload）、
 		 * 相位离开粒子采集（reload 里判断）。四条都会走 stopBatchScan()。
 		 */
-		startBatchScan() {
+		async startBatchScan() {
 			if (!this.batch) return
 			if (this.wizard.phase !== PHASE.PARTICLE) return
-			// #ifdef APP-PLUS
-			if (this.batchScanner) return
-			try {
-				const view = plus.webview.currentWebview()
-				const filters = [
-					plus.barcode.CODE128,
-					plus.barcode.CODE39,
-					plus.barcode.CODE93,
-					plus.barcode.EAN13,
-					plus.barcode.EAN8
-				]
-				const scanner = plus.barcode.create('pr-batch-barcode', filters, {
-					top: '0px',
-					left: '0px',
-					width: '100%',
-					height: '45%',
-					position: 'absolute',
-					background: '#000000'
-				})
-				scanner.onmarked = (type, code) => this.onBatchCode(code)
-				// 识别失败（没对准）不弹错，连续扫码时会疯狂触发，静默即可
-				scanner.onerror = () => {}
-				view.append(scanner)
-				scanner.start({ conceal: true })
-				this.batchScanner = scanner
-				this.batchScanning = true
-				if (this.sessionScanned) this.sessionScanned.clear()
-				this.event = eventOf('PHOTO', '连续扫码已开始：对准条码逐个扫入，重复的会自动忽略；扫完点「完成扫码」。', false)
-			} catch (error) {
-				this.batchScanner = null
-				this.batchScanning = false
-				this.event = eventOf(
-					'ERROR',
-					`批量扫码起不来（${(error && error.message) || error}）。请改用「单次扫码一个」或手动输入。`,
-					false
-				)
-			}
-			// #endif
 			// #ifndef APP-PLUS
 			this.event = eventOf('ERROR', '批量连续扫码只在 App 端可用（H5 没有 plus.barcode），请用「单次扫码一个」。', false)
+			return
+			// #endif
+			// #ifdef APP-PLUS
+			// 先展开面板：留位卡片要先出现在页面上，才有矩形可以量给原生控件
+			this.batchPanelOpen = true
+			this.batchScanError = ''
+			await this.launchBatchScanner()
 			// #endif
 		},
 
-		/** 收掉原生扫码视图并释放摄像头。silent=true 时不弹 Toast（切页/切 Tab 用）。 */
-		stopBatchScan(silent) {
-			// #ifdef APP-PLUS
-			if (this.batchScanner) {
-				try {
-					this.batchScanner.cancel()
-				} catch (error) {
-					// 视图已经被系统回收时会抛，忽略即可
-				}
-				try {
-					this.batchScanner.close()
-				} catch (error) {
-					// 同上
-				}
-				this.batchScanner = null
+		/**
+		 * 真正拉起原生控件：量留位卡片 → 交给模块 start()。
+		 * 启动链的每一步（权限 → 释放残留 → create → 绑事件 → append → start）都在
+		 * utils/batchBarcodeScanner.js 里，页面不再直接碰 plus.barcode。
+		 */
+		async launchBatchScanner() {
+			if (!this.batchScanner) this.batchScanner = this.createBatchScanner()
+			const styles = await this.measureBatchSlot()
+			const result = await this.batchScanner.start({ styles })
+			if (!result.ok) {
+				this.batchScanError = this.describeScannerError(result.reason)
+				this.event = eventOf('ERROR', `${this.batchScanError}。可点「🔄 重新启动扫码」重试。`, false)
+				return
 			}
-			// #endif
-			if (this.batchScanning) {
-				this.batchScanning = false
+			this.batchScanError = ''
+			if (this.sessionScanned) this.sessionScanned.clear()
+			this.event = eventOf('PHOTO', '连续扫码已开始：对准条码逐个扫入，重复的会自动忽略；扫完点「✅ 完成扫码」。', false)
+		},
+
+		/**
+		 * 扫码提示音开关（现场要求「提示音要能取消」）：
+		 * 关掉后 plus.barcode 不再「嘀」，震动反馈保留；设置落盘，下次进来沿用；
+		 * 因为 sound 是 start 参数，下一轮识别（几十毫秒后）就生效。
+		 */
+		toggleScanSound() {
+			this.scanSoundOn = !this.scanSoundOn
+			try {
+				uni.setStorageSync(STORAGE_SCAN_SOUND, this.scanSoundOn)
+			} catch (error) {
+				console.warn('[BatchScan] 提示音设置落盘失败', error)
+			}
+			uni.showToast({
+				title: this.scanSoundOn ? '扫码提示音已开启' : '扫码提示音已关闭（只留震动）',
+				icon: 'none'
+			})
+		},
+
+		/** 取景卡住 / 异常后的手动重启：先 stop（cancel + close）再重新 create + start。 */
+		async restartBatchScan() {
+			if (!this.batchPanelOpen) {
+				await this.startBatchScan()
+				return
+			}
+			if (!this.batchScanner) this.batchScanner = this.createBatchScanner()
+			this.batchScanError = ''
+			const styles = await this.measureBatchSlot()
+			const result = await this.batchScanner.restart({ styles })
+			if (result.ok) {
+				this.event = eventOf('PHOTO', '扫码已重新启动，继续对准条码即可。', false)
+				return
+			}
+			this.batchScanError = this.describeScannerError(result.reason)
+			this.event = eventOf('ERROR', `${this.batchScanError}。`, false)
+		},
+
+		/** 构造扫码器：页面只注入「权限 / Webview / 业务处理 / 状态回调」四件事。 */
+		createBatchScanner() {
+			return createBatchBarcodeScanner({
+				pageVm: this,
+				getWebview: () => getCurrentAppWebview(this),
+				// 复用单码扫码那套相机权限申请与「去系统设置」引导
+				ensurePermission: () => this.ensureCamera(),
+				// 提示音开关：每轮 start 都会重新取一次，关掉后只留震动
+				getFeedback: () => ({ vibrate: true, sound: this.scanSoundOn ? 'default' : 'none' }),
+				onCode: (code, type) => this.onBatchCode(code, type),
+				onError: (error, stage) => this.handleBatchScanError(error, stage),
+				onStateChange: (state) => {
+					this.batchScannerState = state
+					// 统计随状态刷新：每识别一枚都会走 processing → scanning，这里能拿到最新计数
+					this.batchScanStats = this.batchScanner ? this.batchScanner.getStats() : null
+				},
+				// 收工（含「重新启动扫码」）时把本轮统计落盘：
+				// HBuilderX 基座的 console 在电脑上读不到，真机压测的逐枚耗时只能这么带出来。
+				onRunSummary: (summary, reason) => {
+					try {
+						uni.setStorageSync('pharmrelate.batchscan.lastRun', {
+							at: new Date().toISOString(),
+							reason,
+							summary
+						})
+					} catch (error) {
+						console.warn('[BatchScan] 统计落盘失败', error)
+					}
+				}
+			})
+		},
+
+		/**
+		 * 量出留位卡片的真实矩形，换算成原生控件的 styles。
+		 *
+		 * position 用 'static' 是有意的：页面滚动时原生控件跟着内容走，才不会和留位卡片错位；
+		 * top 取「视口内偏移 + 滚动量」，所以先滚到顶再量，量到的就是内容坐标系里的位置。
+		 */
+		async measureBatchSlot() {
+			uni.pageScrollTo({ scrollTop: 0, duration: 0 })
+			await this.$nextTick()
+			await new Promise((resolve) => setTimeout(resolve, 80))
+			const rect = await new Promise((resolve) => {
+				uni.createSelectorQuery()
+					.in(this)
+					.select('#batch-scan-slot')
+					.boundingClientRect((data) => resolve(data || null))
+					.exec()
+			})
+			if (!rect || !rect.width || !rect.height) return null
+			const scroll = await new Promise((resolve) => {
+				uni.createSelectorQuery()
+					.in(this)
+					.selectViewport()
+					.scrollOffset((data) => resolve(data || { scrollTop: 0 }))
+					.exec()
+			})
+			const top = Math.round((rect.top || 0) + ((scroll && scroll.scrollTop) || 0))
+			return {
+				top: `${top}px`,
+				left: `${Math.round(rect.left || 0)}px`,
+				width: `${Math.round(rect.width)}px`,
+				height: `${Math.round(rect.height)}px`,
+				position: 'static',
+				background: '#101a22',
+				frameColor: '#2563EB',
+				scanbarColor: '#2563EB'
+			}
+		},
+
+		/** 把模块的英文错误码翻译成操作员照着就能做的一句话。 */
+		describeScannerError(reason) {
+			const messages = {
+				CAMERA_PERMISSION_DENIED: '相机权限被拒绝：请在系统设置 → 应用 → 权限里允许「相机」',
+				PLUS_UNAVAILABLE: '当前不是 App 运行环境，取不到 plus（H5 请用「单次扫码一个」）',
+				PLUS_BARCODE_UNAVAILABLE: '当前基座没有 Barcode 模块，请用 HBuilderX 重新打包基座',
+				APP_WEBVIEW_UNAVAILABLE: '取不到当前页面 Webview，无法挂载原生扫码控件',
+				BARCODE_CREATE_RETURNED_NULL: '原生扫码控件创建失败（plus.barcode.create 返回空）'
+			}
+			return messages[reason] || `扫码器启动失败：${reason || '未知原因'}`
+		},
+
+		/** 模块报错（初始化 / onerror / 业务处理）统一落到界面与日志。 */
+		handleBatchScanError(error, stage) {
+			const message = (error && (error.message || error.errMsg)) || String(error || '')
+			console.error('[BatchScan] ERROR', stage, message)
+			if (stage === 'onmarked') {
+				// 业务处理失败：摄像头不停，只提示
+				uni.showToast({ title: '扫码结果处理失败，请再扫一次', icon: 'none' })
+				return
+			}
+			this.batchScanError = this.describeScannerError(message)
+			uni.showToast({ title: '扫码器异常，可点「重新启动扫码」', icon: 'none' })
+		},
+
+		/** 收掉原生扫码控件并释放摄像头。silent=true 时不弹 Toast（切页/切 Tab 用）。 */
+		async stopBatchScan(silent) {
+			if (this.batchScanner) await this.batchScanner.stop('stop')
+			this.batchScanError = ''
+			this.batchScannerState = ''
+			this.batchScanStats = null
+			if (this.batchPanelOpen) {
+				this.batchPanelOpen = false
 				if (!silent) uni.showToast({ title: '已结束连续扫码', icon: 'none' })
 			}
 		},
 
 		/**
-		 * 连续扫码每收到一个码就走这里。去重是**折中方案**（需求 6）：
+		 * 连续扫码每收到一个码就走这里（业务层的第 2、3 层去重；第 1 层「瞬时防抖」
+		 * 在 utils/batchBarcodeScanner.js 里，所以这里不会再看到同一枚码连刷）。
+		 *
 		 *   1. 含非数字字符 → 报警拒绝（绝不做 \D 全剔，避免把错码洗成合法码）；
-		 *   2. 本次会话内刚扫过 → 震动 + Toast，静默忽略、不写库（真重复）；
+		 *   2. 本罐 / 本次会话内已扫过 → 震动 + Toast，静默忽略、不写库（真重复）；
 		 *   3. 跨罐 / 跨箱已存在 → 交给 applyCodes 报警 + 弹窗核对（可能扫错了别的罐）。
+		 *
+		 * 返回值只给模块做统计用；**无论返回什么，模块都会继续下一次 start**，
+		 * 所以业务校验失败不会停摄像头。
 		 */
-		onBatchCode(raw) {
-			if (!this.batch) return
-			if (this.wizard.phase !== PHASE.PARTICLE) return
+		onBatchCode(raw, type) {
+			if (!this.batch) return { accepted: false, reason: 'NO_BATCH' }
+			if (this.wizard.phase !== PHASE.PARTICLE) return { accepted: false, reason: 'NOT_PARTICLE_PHASE' }
 			const extract = extractDigits(raw, 1)
 			if (extract.illegal) {
 				this.alarm(
@@ -749,13 +965,15 @@ export default {
 						true
 					)
 				)
-				return
+				return { accepted: false, reason: 'INVALID_FORMAT' }
 			}
 			const code = extract.code
 			if (this.sessionScanned && this.sessionScanned.has(code)) {
-				uni.vibrateLong()
-				uni.showToast({ title: '重复条码已自动忽略', icon: 'none' })
-				return
+				// 这一层是「本罐本次已扫过」的正常重复（压测里占大头）：
+				// 只给轻提示，不用长震动 —— 现场一次连扫几十枚，长震动会把人震麻。
+				uni.vibrateShort({ type: 'light' })
+				uni.showToast({ title: '本次已扫过，重复码忽略', icon: 'none' })
+				return { accepted: false, reason: 'CURRENT_BATCH_DUPLICATE' }
 			}
 			const result = applyCodes(this.batch, [code])
 			const eventCode = result.event && result.event.code
@@ -771,6 +989,7 @@ export default {
 				})
 			}
 			this.handle(result)
+			return { accepted: eventCode === EVENT.OK, reason: eventCode || 'UNKNOWN' }
 		},
 
 		/**
@@ -1305,6 +1524,70 @@ export default {
 .card-title {
 	font-size: 30rpx;
 	font-weight: 600;
+}
+
+/*
+	批量连续扫码的留位卡片：原生控件按这块区域的实测矩形挂上去（utils/batchBarcodeScanner.js），
+	所以它不会覆盖下面的按钮；扫描失败时这里显示失败原因，配合「🔄 重新启动扫码」重试。
+*/
+.batch-scan-card {
+	padding-bottom: 16rpx;
+}
+
+.batch-scan-head {
+	display: flex;
+	align-items: center;
+}
+
+/*
+	提示音开关：与右上角「扫描中」徽标**同款几何**（同高、同圆角、同字号、同内边距），
+	只把颜色换成中性灰表示"可点"，这样一行里的两个小控件左右对齐、行高一致。
+	注意两件事，少一件就会错位：
+	  1. uni-app 的 <button> 自带 padding / line-height / margin auto，必须逐项覆盖；
+	  2. 页面上另有 `button.ghost { margin-top: 16rpx }`，它声明在后面会把本按钮顶下去，
+	     所以选择器带上 .batch-scan-head 提高优先级，用 px 与 .badge（App.vue，px 定义）对齐。
+*/
+.batch-scan-head button.batch-scan-sound {
+	display: inline-block;
+	margin: 0 0 0 8px;
+	padding: 2px 10px;
+	border: 1px solid #d3dae0;
+	border-radius: 999px;
+	background: #eef1f4;
+	color: #475569;
+	font-size: 12px;
+	line-height: 1.5;
+	min-height: 0;
+	height: auto;
+	box-sizing: border-box;
+}
+
+/* uni-app 的 button 默认还带一层 ::after 边框，会和上面的 border 叠成双线 */
+.batch-scan-head button.batch-scan-sound::after {
+	border: none;
+}
+
+.batch-scan-head button.batch-scan-sound.button-hover {
+	background: #e2e8ee;
+	color: #334155;
+}
+
+.batch-scan-slot {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 40vh;
+	margin-top: 16rpx;
+	padding: 0 24rpx;
+	background: #101a22;
+	border-radius: 12rpx;
+}
+
+.batch-scan-slot-hint {
+	font-size: 24rpx;
+	color: #b6c6d1;
+	text-align: center;
 }
 
 .hint {
