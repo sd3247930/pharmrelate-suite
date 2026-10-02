@@ -1,0 +1,35 @@
+{
+  "id": "pharmrelate-ocr",
+  "displayName": "PharmRelate 离线 OCR（ML Kit Bundled）",
+  "version": "0.1.0",
+  "description": "图库标签照片的离线文字识别：图片路径 → 文本块（含 bounding box）。模型随安装包提供，不联网、不上传图片。",
+  "keywords": ["ocr", "mlkit", "offline", "pharmrelate"],
+  "repository": "https://github.com/sd3247930/pharmrelate-suite",
+  "dcloudext": {
+    "type": "uts",
+    "sale": {
+      "regular": { "price": "0.00" },
+      "sourcecode": { "price": "0.00" }
+    }
+  },
+  "uni_modules": {
+    "dependencies": [],
+    "encrypt": [],
+    "platforms": {
+      "cloud": {
+        "tcb": "n",
+        "aliyun": "n"
+      },
+      "client": {
+        "App": {
+          "app-vue": "y",
+          "app-nvue": "y"
+        },
+        "H5-mobile": {
+          "S": "n",
+          "web": "n"
+        }
+      }
+    }
+  }
+}

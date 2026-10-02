@@ -241,15 +241,23 @@
 				{{ pasteOpen ? '收起手动输入' : '展开手动输入条码' }}
 			</button>
 			<template v-if="pasteOpen">
-				<input
-					class="input code"
+				<textarea
+					class="input code batch-input"
 					v-model="pasteCode"
-					placeholder="粘贴或输入条码，回车提交"
-					confirm-type="done"
-					@confirm="submitPaste"
+					auto-height
+					:maxlength="-1"
+					placeholder="粘贴或输入粒子码序列号：支持空格、换行、中英文逗号/分号分隔，一次可录入多个（例如 6 个）"
 				/>
-				<button class="secondary" :disabled="busy || !batch" @click="submitPaste">提交</button>
-				<text class="hint">支持空格或逗号分隔一次输入多个粒子码；条码枪以回车结尾会自动提交。</text>
+				<button class="secondary" :disabled="batchSubmitting || !batch" @click="submitPaste">
+					{{ wizard.phase === 'box' || wizard.phase === 'can' ? '提交' : '解析并填入' }}
+				</button>
+				<button class="ghost" :disabled="batchSubmitting || !batch" @click="openAlbumAssist">
+					🖼 从图库选图辅助录入
+				</button>
+				<text class="hint">
+					只输 {{ particleShortLength }} 位序列号会自动补前缀 {{ particlePrefix }}；重复码、错误前缀会被挡下并汇总提示。
+					图库那张图只用于放大看清数字，本机不做自动识别、照片用完即弃。
+				</text>
 			</template>
 		</view>
 
@@ -263,15 +271,36 @@
 			<button class="ghost" :disabled="busy" @click="checkServer">查看主控机是否在线</button>
 		</view>
 
+		<!--
+			renderjs 桥：:change:prop 触发视图层（WebView）里的解码器 —— 那里才有
+			Blob / Image / canvas / createImageBitmap，wasm 才能真正跑起来（服务层 JSCore 会卡死）。
+			这个 view 不显示任何东西，只用来传任务、收结果。
+		-->
+		<view class="decoder-bridge" :prop="decodeTask" :change:prop="imageDecoder.onTaskChange"></view>
+
 		<!-- 槽位操作浮层 -->
+		<!--
+			隐藏画布：只用于「图库图片 → 像素」，像素交给 zxing-wasm 解码条码。
+			为什么不用 Blob/canvas API 在 JS 里做：App 的 JS 在服务层（JSCore），没有 Blob/Image，
+			所以走 uni-app 自己的 canvas API（视图层绘制、像素回传服务层）。
+		-->
 		<view v-if="editing" class="overlay">
 			<view class="sheet">
 				<text class="sheet-title">
-					箱 {{ editing.boxIndex + 1 }} · 罐 {{ editing.canIndex + 1 }} · 槽位 {{ editing.slotIndex + 1 }}
+					箱 {{ editing.boxIndex + 1 }} · 罐 {{ editing.canIndex + 1 }} · 槽位 {{ editing.slotIndex + 1 }}（{{ editing.code ? '改' : '补录' }}）
 				</text>
-				<text class="hint code">{{ editing.code || '（空）' }}</text>
-				<input class="input code" v-model="replaceValue" placeholder="输入新的粒子码做替换" />
-				<button class="primary" :disabled="busy" @click="doReplace">替换</button>
+				<text class="hint code">{{ editing.code || '（空槽位）' }}</text>
+				<input
+					class="input code"
+					v-model="replaceValue"
+					:placeholder="editing.code ? '输入新的粒子码做替换' : '输入粒子码做补录'"
+				/>
+				<text class="hint">
+					只输 {{ particleShortLength }} 位序列号会自动补前缀 {{ particlePrefix }}；也可以直接粘贴完整 20 位码（不会重复加前缀）。
+				</text>
+				<button class="primary" :disabled="slotSubmitting" @click="doReplace">
+					{{ editing.code ? '替换' : '填入' }}
+				</button>
 				<button class="danger" :disabled="busy" @click="doDelete">删除该槽位</button>
 				<button class="ghost" @click="editing = null">取消</button>
 			</view>
@@ -281,14 +310,11 @@
 		<view v-if="photo" class="overlay">
 			<view class="sheet">
 				<view class="row-between">
-					<text class="sheet-title">{{ photo.kind === 'box' ? '拍照识别箱号' : '拍照识别罐号' }}</text>
+					<text class="sheet-title">{{ photoTitle }}</text>
 					<text class="badge badge-neutral">{{ photo.recognizing ? '识别中' : '人工确认' }}</text>
 				</view>
 				<text v-if="photo.recognizing" class="hint">正在识别…（本机没有识别引擎时会立刻降级为人工读数）</text>
-				<text class="hint">
-					本机暂无自动识别能力 / 识别不确定，请人工读数并输入：照着照片把数字看清楚，
-					再点下面的按钮进输入框键入（识别只负责「看见什么数字」，上限与查重由业务层判断）。
-				</text>
+				<text class="hint">{{ photoHint }}</text>
 				<scroll-view scroll-y class="photo-wrap">
 					<image
 						class="photo"
@@ -303,10 +329,46 @@
 					<button class="secondary" @click="rotatePhoto">旋转 90°</button>
 					<button class="secondary" @click="resetPhoto">复位</button>
 				</view>
-				<button class="primary" :disabled="busy" @click="goManualFromPhoto">
-					照着照片输入{{ photo.kind === 'box' ? '箱号' : '罐号' }}
-				</button>
-				<button class="ghost" :disabled="busy" @click="capturePhoto(photo.kind)">重拍</button>
+				<!-- 粒子环节：图库/拍照辅助 —— 照着图在同一个多行面板里批量录入 -->
+				<template v-if="photo.kind === 'particle'">
+					<!-- OCR 候选区：识别成功才出现；没有插件时这里显示"无 OCR 插件"，下面照样能手输 -->
+					<view class="row-between ocr-head">
+						<text class="card-title">识别结果</text>
+						<text :class="['badge', ocrBadgeClass]">{{ ocrStatusLabel }}</text>
+					</view>
+					<text v-if="ocrMessage" class="hint">{{ ocrMessage }}</text>
+					<view v-if="ocrListRows.length" class="ocr-list">
+						<view v-for="row in ocrListRows" :key="row.key" class="ocr-row">
+							<text class="ocr-index">{{ row.index }}</text>
+							<text class="ocr-code code">{{ row.code || row.input }}</text>
+							<text :class="['badge', row.badge]">{{ row.status }}</text>
+							<button class="ghost ocr-del" @click="removeOcrCandidate(row)">删除</button>
+						</view>
+					</view>
+					<view v-if="ocrListRows.length" class="actions">
+						<button class="secondary" :disabled="ocrStatus === 'running'" @click="rerunOcr">重新识别</button>
+						<button class="primary" :disabled="batchSubmitting || !ocrFillableCodes.length" @click="submitOcrCandidates">
+							确认有效码并填入（{{ ocrFillableCodes.length }}）
+						</button>
+						<button class="ghost" @click="clearOcrCandidates()">清空识别结果</button>
+					</view>
+
+					<textarea
+						class="input code batch-input"
+						v-model="pasteCode"
+						auto-height
+						:maxlength="-1"
+						placeholder="照着图片输入粒子码序列号：空格/换行/逗号分隔，可一次多个"
+					/>
+					<button class="primary" :disabled="batchSubmitting" @click="submitPasteFromPhoto">解析并填入</button>
+					<button class="ghost" :disabled="batchSubmitting" @click="openAlbumAssist">换一张图</button>
+				</template>
+				<template v-else>
+					<button class="primary" :disabled="busy" @click="goManualFromPhoto">
+						照着照片输入{{ photo.kind === 'box' ? '箱号' : '罐号' }}
+					</button>
+					<button class="ghost" :disabled="busy" @click="capturePhoto(photo.kind)">重拍</button>
+				</template>
 				<button class="ghost" :disabled="busy" @click="photo = null">取消</button>
 			</view>
 		</view>
@@ -332,6 +394,8 @@ import {
 	deriveWizard,
 	describeCodeIssue,
 	extractDigits,
+	fillParticleCodesIntoEmptySlots,
+	fillSlot,
 	finishRemaining,
 	findCan,
 	findUsage,
@@ -345,6 +409,24 @@ import {
 	transition,
 	undo
 } from '../../services/localBatch'
+import {
+	PARTICLE_PREFIX,
+	PARTICLE_SHORT_LENGTH,
+	barcodeResultsToBlocks,
+	normalizeParticleCode,
+	parseOcrParticleCandidates,
+	parseParticleBatch,
+	summarizeBatchParse
+} from '../../services/particleInput'
+import { recognizeImage } from '../../services/ocr'
+import {
+	DECODER_MAX_SIDE,
+	DECODER_SOFT_TIMEOUT_MS,
+	DECODER_TIMEOUT_MS,
+	IMAGE_CODE_DECODER_ENABLED,
+	readImageAsDataUrl,
+	readWasmAsDataUrl
+} from '../../services/imageCodeDecoder'
 import { createBatchBarcodeScanner, getCurrentAppWebview } from '../../utils/batchBarcodeScanner'
 
 /**
@@ -411,6 +493,21 @@ export default {
 			cameraHint: '',
 			editing: null,
 			replaceValue: '',
+			// 槽位补录/替换 防连点（原来借用的 busy 只服务"检查主控机在线"，等于没防抖）
+			slotSubmitting: false,
+			// 批量录入 防连点
+			batchSubmitting: false,
+			// 模板里要用到的粒子码规则常量（单一来源：services/particleInput.js）
+			particlePrefix: PARTICLE_PREFIX,
+			particleShortLength: PARTICLE_SHORT_LENGTH,
+			// 图库 OCR（阶段 2 可降级）：插件不存在时 ocrStatus = 'unavailable'，走手动录入
+			ocrStatus: 'idle',
+			ocrMessage: '',
+			ocrCandidates: null,
+			ocrDeleted: {},
+			// renderjs 解码桥：decodeTask 变化即触发视图层解码（R1）
+			decodeTask: null,
+			decodeTimings: null,
 			healthOk: false,
 			localId: '',
 			// 批量连续扫码（plus.barcode）：非空表示原生扫码视图正在跑
@@ -484,6 +581,10 @@ export default {
 			return `⚠️ 可能漏扫：当前已扫 ${this.currentCanScanned} 个，还差 ${missing} 个未扫描`
 			},
 			/** 扫码器状态的中文标签（状态机原值在 batchScannerState 里）。 */
+			/** 当前罐是否已满（满了相位会推进到"本罐核对"，但手动补录的提示要能说清原因）。 */
+			currentCanIsFull() {
+				return this.currentCanPlanned > 0 && this.currentCanScanned >= this.currentCanPlanned
+			},
 			batchScannerStateLabel() {
 				const labels = {
 					idle: '未启动',
@@ -503,6 +604,71 @@ export default {
 				return 'badge-neutral'
 			},
 			/** 取景区里的提示文字：失败时显示原因，正常时显示占位说明。 */
+			/** 照片/图库浮层标题与提示：箱号 / 罐号 / 粒子（图库辅助）三种用途。 */
+			/** OCR 状态标签与徽标（无插件时明确显示"手动录入"）。 */
+			ocrStatusLabel() {
+				const labels = {
+					idle: '待识别',
+					decoding: '识别中',
+					running: '识别中',
+					success: '识别完成',
+					done: '识别完成',
+					partial: '部分识别',
+					empty: '未识别到码',
+					timeout: '识别超时',
+					failed: '识别失败',
+					unavailable: '无 OCR 插件'
+				}
+				return labels[this.ocrStatus] || '待识别'
+			},
+			ocrBadgeClass() {
+				if (this.ocrStatus === 'done' || this.ocrStatus === 'success') return 'badge-ok'
+				if (this.ocrStatus === 'running' || this.ocrStatus === 'decoding') return 'badge-info'
+				if (this.ocrStatus === 'partial' || this.ocrStatus === 'empty' || this.ocrStatus === 'timeout') {
+					return 'badge-warn'
+				}
+				if (this.ocrStatus === 'unavailable') return 'badge-warn'
+				if (this.ocrStatus === 'failed') return 'badge-error'
+				return 'badge-neutral'
+			},
+			/** 候选列表（有效 / 本次重复 / 批次内已存在 / 无效 四类一起列出来）。 */
+			ocrListRows() {
+				const parsed = this.ocrCandidates
+				if (!parsed) return []
+				const rows = []
+				parsed.valid.forEach((item) => {
+					rows.push({ kind: 'valid', key: `v-${item.code}`, index: rows.length + 1, code: item.code, input: item.input, status: '有效', badge: 'badge-ok' })
+				})
+				parsed.duplicateInInput.forEach((item) => {
+					rows.push({ kind: 'dup-input', key: `i-${item.code}`, index: rows.length + 1, code: item.code, input: item.input, status: '本次重复', badge: 'badge-warn' })
+				})
+				parsed.duplicateInCurrentBatch.forEach((item) => {
+					rows.push({ kind: 'dup-batch', key: `b-${item.code}`, index: rows.length + 1, code: item.code, input: item.input, status: '批次内已存在', badge: 'badge-warn' })
+				})
+				parsed.invalid.forEach((item, index) => {
+					rows.push({ kind: 'invalid', key: `x-${index}-${item.input}`, index: rows.length + 1, code: '', input: item.input, status: '无效', badge: 'badge-error' })
+				})
+				return rows
+			},
+			/** 当前可填入的有效码（排除操作员手动删掉的）。 */
+			ocrFillableCodes() {
+				return this.ocrListRows
+					.filter((row) => row.kind === 'valid' && !this.ocrDeleted[row.key])
+					.map((row) => row.code)
+			},
+			photoTitle() {
+				if (!this.photo) return ''
+				if (this.photo.kind === 'box') return '拍照识别箱号'
+				if (this.photo.kind === 'can') return '拍照识别罐号'
+				return '图库辅助录入粒子码'
+			},
+			photoHint() {
+				if (!this.photo) return ''
+				if (this.photo.kind === 'particle') {
+					return '本机不做自动识别：请放大图片看清每枚标签上的序列号，在下面输入框里批量录入（13 位序列号会自动补前缀，重复码与错误前缀会被挡下）。'
+				}
+				return '本机暂无自动识别能力 / 识别不确定，请人工读数并输入：照着照片把数字看清楚，再点下面的按钮进输入框键入（识别只负责「看见什么数字」，上限与查重由业务层判断）。'
+			},
 			batchScanSlotHint() {
 				if (this.batchScanError) return this.batchScanError
 				if (this.batchScannerState === 'processing') return '已识别到一枚，正在写入…'
@@ -541,6 +707,9 @@ export default {
 	 */
 	created() {
 		this.sessionScanned = new Set()
+		// 非响应式实例字段：解码任务序号与 renderjs 回调的 pending（不需要 Vue 建响应式）
+		this.decodeSeq = 0
+		this.decodePending = null
 		// 提示音开关沿用上次的选择（现场普遍嫌每枚都响；关掉后还有震动反馈）
 		try {
 			const saved = uni.getStorageSync(STORAGE_SCAN_SOUND)
@@ -1341,7 +1510,9 @@ export default {
 			if (kind === 'can' && wizard.phase !== PHASE.CAN) return
 			uni.chooseImage({
 				count: 1,
-				sourceType: ['camera'],
+				// 阶段 C：拍照识别不再只认相机 —— 现场常常是"别人微信发来的标签照片"，
+				// 所以要能直接从图库选图（选图后仍是人工读数，本机不做自动识别）。
+				sourceType: ['camera', 'album'],
 				sizeType: ['compressed'],
 				success: async (res) => {
 					const paths = (res && res.tempFilePaths) || []
@@ -1422,10 +1593,13 @@ export default {
 		/** 手动输入兜底卡：空格 / 逗号分隔，一次可多个（条码枪 / 整段粘贴）。 */
 		submitPaste() {
 			if (!this.batch) return
+			if (this.batchSubmitting) return
 			const raw = (this.pasteCode || '').trim()
-			if (!raw) return
+			if (!raw) {
+				uni.showToast({ title: '输入不能为空，请粘贴或输入粒子码', icon: 'none' })
+				return
+			}
 			const codes = raw.split(/[\s,;]+/).filter(Boolean)
-			this.pasteCode = ''
 			if (this.wizard.phase === PHASE.BOX || this.wizard.phase === PHASE.CAN) {
 				if (codes.length > 1) {
 					this.alarm(
@@ -1433,27 +1607,354 @@ export default {
 					)
 					return
 				}
+				this.pasteCode = ''
 				this.considerSingle(codes[0], this.wizard.phase === PHASE.BOX ? 'box' : 'can')
 				return
 			}
-			if (this.wizard.phase !== PHASE.PARTICLE) {
+			// 罐已满时相位会推进到「本罐核对」，但操作员仍可能往里粘贴 —— 交给数据层
+			// 给出「当前罐已满」这个具体原因，而不是笼统的"当前步骤不接受输入"。
+			if (this.wizard.phase !== PHASE.PARTICLE && !this.currentCanIsFull) {
 				this.event = eventOf(EVENT.WRONG_STATE, `当前步骤是「${this.wizard.prompt}」，不接受手动输入。`, false)
 				return
 			}
-			// 粒子通道也要过一遍严格提取：含字母一律报警，
-			// 绝不静默把字母剔掉当成数字（三条通道同一口径）
-			const dirty = codes.map((code) => extractDigits(code, 1)).find((item) => item.illegal)
-			if (dirty) {
-				this.alarm(
-					eventOf(
-						'ILLEGAL_CHAR',
-						`条码 ${dirty.code} 含非数字字符「${dirty.illegal}」，已拒绝。请核对标签后重扫（不会自动把字母换成数字）。`,
-						true
-					)
+			this.submitBatchParticleText(raw)
+		},
+
+		/**
+		 * 批量粒子码录入（阶段 B）：手动粘贴与"图库辅助人工读数"共用这一条路径。
+		 *
+		 * 口径（2026-10-02 拍板）：
+		 *   - 13 位序列号自动补前缀 8206233；20 位码原样；错前缀/错长度/含字母一律判无效；
+		 *   - 输入内重复、本罐/跨罐已存在的重复都挡下；
+		 *   - **超出计划不再整帧拒绝**：能填的先填，多出来的明确列出来（不静默丢弃）；
+		 *   - 汇总一次提示，绝不连弹几十个 Toast。
+		 */
+		submitBatchParticleText(raw) {
+			const parsed = parseParticleBatch(raw)
+			if (!parsed.total) return null
+			if (!parsed.valid.length) {
+				const first = parsed.invalid[0]
+				uni.showToast({
+					title: first ? first.message : '没有解析到可用的粒子码',
+					icon: 'none'
+				})
+				this.event = eventOf(
+					'ILLEGAL_CHAR',
+					`${summarizeBatchParse(parsed)}；没有任何有效粒子码写入。`,
+					false
 				)
+				return null
+			}
+			const outcome = this.writeParticleCodes(
+				parsed.valid.map((item) => item.code),
+				`本次解析 ${parsed.total} 条：有效 ${parsed.valid.length} 条`
+			)
+			return outcome ? { parsed, info: outcome.info } : null
+		},
+
+		/**
+		 * 批量写入的**唯一出口**：手动粘贴与 OCR 确认都走这里。
+		 * 成功返回 { info }；失败返回 null（已 Toast 提示，弹窗/浮层保持不动）。
+		 */
+		writeParticleCodes(codes, headline) {
+			this.batchSubmitting = true
+			const result = fillParticleCodesIntoEmptySlots(this.batch, codes)
+			this.batchSubmitting = false
+			const info = result.result || {}
+			this.handle(result)
+			if (!(result.event && result.event.code === EVENT.OK)) {
+				uni.showToast({ title: (result.event && result.event.message) || '未写入，请检查后重试', icon: 'none' })
+				return null
+			}
+			const segments = [headline]
+			if (info.duplicates && info.duplicates.length) segments.push(`重复 ${info.duplicates.length} 条`)
+			if (info.invalid && info.invalid.length) segments.push(`无效 ${info.invalid.length} 条`)
+			if (info.overflow && info.overflow.length) segments.push(`超出计划 ${info.overflow.length} 条未写入`)
+			const lines = [segments.join('，')]
+			if (info.overflow && info.overflow.length) {
+				// 未写入的码留在输入框里，操作员能复制到别处 / 补到下一罐
+				this.pasteCode = info.overflow.map((code) => code).join('\n')
+				lines.push(`未写入：${info.overflow.join('、')}`)
+			} else {
+				this.pasteCode = ''
+			}
+			this.event = eventOf(EVENT.OK, lines.join('\n'), false)
+			uni.showToast({ title: segments.join('，'), icon: 'none' })
+			return { info }
+		},
+
+		/** renderjs 视图层解码完成的回调（R1：结果从视图层回传）。 */
+		onDecodeResult(payload) {
+			const pending = this.decodePending
+			if (!pending || !payload || payload.taskId !== pending.taskId) return
+			this.decodePending = null
+			this.decodeTimings = Object.assign({}, pending.timings || {}, payload.timings || {})
+			this.decodeDebug = payload.debug || null
+			pending.resolve(payload)
+		},
+
+		/** 等 renderjs 的回调，带硬超时（超时也必须给页面一个结果）。 */
+		waitDecodeResult(taskId, timeoutMs) {
+			return new Promise((resolve) => {
+				const timer = setTimeout(() => {
+					if (this.decodePending && this.decodePending.taskId === taskId) {
+						this.decodePending = null
+						resolve({ taskId, ok: false, timeout: true, message: '识别超时', codes: [], timings: {} })
+					}
+				}, timeoutMs)
+				this.decodePending = {
+					taskId,
+					timings: {},
+					resolve: (payload) => {
+						clearTimeout(timer)
+						resolve(payload)
+					}
+				}
+			})
+		},
+
+		/**
+		 * 图库选图后的自动识别（R1/R3/R7）：
+		 *   ① 条码解码（renderjs 视图层，免插件，条码自带校验位最准）
+		 *   ② 不够目标数量才补 ML Kit OCR（只有自定义基座才有插件）
+		 *   ③ 都不行 → 如实说明 + 手动录入（永远可用，12s 内必给结果）
+		 *
+		 * 目标数量 expectedCount = 当前罐剩余空槽位（为空/已满则直接跳过自动识别）。
+		 */
+		async runOcrAssist(path) {
+			this.ocrCandidates = null
+			this.ocrDeleted = {}
+			this.decodeTimings = null
+			const isStale = () => !this.photo || this.photo.path !== path
+			const started = Date.now()
+
+			// R3：当前罐还剩几个空槽位（业务预期数量），满了就没必要识别
+			const expectedCount = Math.max(0, this.currentCanPlanned - this.currentCanScanned)
+			if (!expectedCount) {
+				this.ocrStatus = 'unavailable'
+				this.ocrMessage = '当前罐已满，无需自动识别；要补录请先删除槽位或进入下一罐。'
 				return
 			}
-			this.handle(applyCodes(this.batch, codes))
+			if (!IMAGE_CODE_DECODER_ENABLED) {
+				this.ocrStatus = 'unavailable'
+				this.ocrMessage = '本机自动识别暂未启用，请放大图片后手动录入。'
+				return
+			}
+
+			this.ocrStatus = 'decoding'
+			this.ocrMessage = `正在本机识别…（目标 ${expectedCount} 个粒子码）`
+			const softTimer = setTimeout(() => {
+				if (this.ocrStatus === 'decoding') this.ocrMessage = `仍在识别中…（已等 ${Math.round(DECODER_SOFT_TIMEOUT_MS / 1000)}s，可继续等待或直接手输）`
+			}, DECODER_SOFT_TIMEOUT_MS)
+
+			try {
+				// 图片与 wasm 都读成 data URL（wasm 走单例缓存，只读一次）
+				const readStart = Date.now()
+				const [imageBase64, wasmBase64] = await Promise.all([
+					readImageAsDataUrl(path),
+					readWasmAsDataUrl()
+				])
+				const loadImageMs = Date.now() - readStart
+				if (isStale()) return
+
+				const taskId = `d${++this.decodeSeq}`
+				const result = await (async () => {
+					const pending = this.waitDecodeResult(taskId, DECODER_TIMEOUT_MS)
+					// 触发 renderjs（:change:prop）：带上 wasm 与图片，视图层收到就开始解码
+					this.decodeTask = { taskId, imageBase64, wasmBase64, maxSide: DECODER_MAX_SIDE, expectedCount }
+					return pending
+				})()
+				if (isStale()) return
+
+				const timings = Object.assign({ loadImageMs }, this.decodeTimings || {}, {
+					totalMs: Date.now() - started
+				})
+				timings.debug = this.decodeDebug || null
+				const barcodeCodes = (result && result.codes) || []
+				const parsedBarcode = barcodeCodes.length
+					? parseOcrParticleCandidates(barcodeResultsToBlocks(barcodeCodes), {
+							isUsed: (code) => findUsage(this.batch, code, 1)
+						})
+					: null
+				let candidates = parsedBarcode
+				const parseStart = Date.now()
+				let ocrUsed = false
+
+				// ② 条码不够目标数量 → 补 ML Kit OCR（没有插件就跳过，不算失败）
+				if (!result.ok || !candidates || candidates.valid.length < expectedCount) {
+					const ocr = await recognizeImage(path)
+					if (isStale()) return
+					if (ocr.success && ocr.blocks && ocr.blocks.length) {
+						ocrUsed = true
+						const parsedOcr = parseOcrParticleCandidates(ocr.blocks, {
+							isUsed: (code) => findUsage(this.batch, code, 1)
+						})
+						candidates = this.mergeCandidates(candidates, parsedOcr)
+						timings.ocrBlocks = ocr.blocks.length
+					} else if (ocr.code !== 'OCR_PLUGIN_MISSING') {
+						timings.ocrError = ocr.message
+					}
+				}
+				timings.parseMs = Date.now() - parseStart
+				timings.totalMs = Date.now() - started
+				timings.expectedCount = expectedCount
+				timings.validCount = candidates ? candidates.valid.length : 0
+				timings.ocrUsed = ocrUsed
+				this.persistDecodeTimings(timings)
+
+				if (candidates && (candidates.valid.length || candidates.duplicateInCurrentBatch.length)) {
+					this.ocrCandidates = candidates
+					const enough = candidates.valid.length >= expectedCount
+					this.ocrStatus = enough ? 'success' : 'partial'
+					const parts = [
+						`条码识别 ${barcodeCodes.length} 枚`,
+						ocrUsed ? `OCR 补充 ${timings.ocrBlocks || 0} 块` : '',
+						`有效 ${candidates.valid.length}/${expectedCount}`,
+						`${timings.totalMs}ms`
+					].filter(Boolean)
+					this.ocrMessage = enough
+						? `${parts.join(' · ')}，已足够，请核对后确认。`
+						: `${parts.join(' · ')}，不足目标数量，可确认现有结果后手动补录。`
+					return
+				}
+
+				// ③ 没有任何候选 → 如实说明原因，手动录入照常
+				const reason = result.ok
+					? `本机条码解码没找到可用粒子码（${timings.barcodeDecodeMs || 0}ms）`
+					: result.timeout
+						? '自动识别超时'
+						: `解码失败：${result.message || '未知原因'}`
+				this.ocrStatus = result.timeout ? 'timeout' : 'unavailable'
+				this.ocrMessage = `${reason}（共 ${timings.totalMs}ms）。请核对图片或改为手动录入。`
+			} catch (error) {
+				if (isStale()) return
+				this.ocrStatus = 'unavailable'
+				this.ocrMessage = `自动识别未完成：${(error && error.message) || error}。请改为手动录入。`
+			} finally {
+				clearTimeout(softTimer)
+			}
+		},
+
+		/** 条码候选 + OCR 候选合并（同一枚码只留一条，T8）。 */
+		mergeCandidates(first, second) {
+			if (!first) return second
+			if (!second) return first
+			const seen = {}
+			const valid = []
+			first.valid.concat(second.valid).forEach((item) => {
+				if (seen[item.code]) return
+				seen[item.code] = true
+				valid.push(item)
+			})
+			const dedupe = (list) => {
+				const out = []
+				list.forEach((item) => {
+					if (item.code && seen[item.code]) return
+					if (item.code) seen[item.code] = true
+					out.push(item)
+				})
+				return out
+			}
+			return {
+				valid,
+				duplicateInInput: first.duplicateInInput.concat(second.duplicateInInput),
+				duplicateInCurrentBatch: dedupe(
+					first.duplicateInCurrentBatch.concat(second.duplicateInCurrentBatch)
+				),
+				invalid: first.invalid.concat(second.invalid),
+				rawText: `${first.rawText}\n${second.rawText}`,
+				blockCount: (first.blockCount || 0) + (second.blockCount || 0),
+				mergedCount: (first.mergedCount || 0) + (second.mergedCount || 0)
+			}
+		},
+
+		/** 分段耗时落盘（与"逐枚耗时"同一套路：基座 console 读不到，只能落盘再取）。 */
+		persistDecodeTimings(timings) {
+			try {
+				uni.setStorageSync('pharmrelate.batchscan.lastDecode', {
+					at: new Date().toISOString(),
+					timings
+				})
+			} catch (error) {
+				console.warn('[BatchScan] 识别耗时落盘失败', error)
+			}
+		},
+
+		rerunOcr() {
+			if (!this.photo) return
+			if (this.ocrStatus === 'running') return
+			this.runOcrAssist(this.photo.path)
+		},
+
+		removeOcrCandidate(row) {
+			const next = Object.assign({}, this.ocrDeleted)
+			next[row.key] = true
+			this.ocrDeleted = next
+		},
+
+		clearOcrCandidates(message) {
+			this.ocrCandidates = null
+			this.ocrDeleted = {}
+			this.ocrStatus = 'idle'
+			this.ocrMessage = typeof message === 'string' ? message : '已清空识别结果。'
+		},
+
+		/** 确认有效码 → 走唯一的批量写入出口（严禁 OCR 直接写槽位）。 */
+		submitOcrCandidates() {
+			const codes = this.ocrFillableCodes
+			if (!codes.length) {
+				uni.showToast({ title: '没有可填入的有效码', icon: 'none' })
+				return
+			}
+			const validTotal = (this.ocrCandidates && this.ocrCandidates.valid.length) || 0
+			const outcome = this.writeParticleCodes(codes, `OCR 有效 ${validTotal} 条（本次确认 ${codes.length} 条）`)
+			if (!outcome) return
+			this.clearOcrCandidates(`已填入 ${outcome.info.written.length} 枚。`)
+			if (!this.pasteCode) this.photo = null
+		},
+
+		/** 图库辅助浮层里的「解析并填入」：复用同一条批量录入路径，写干净了就收起图片。 */
+		submitPasteFromPhoto() {
+			const outcome = this.submitBatchParticleText((this.pasteCode || '').trim())
+			if (!outcome) return
+			// 没有遗留未写入的码 → 图片已经没用了，收起来（照片本来就只在内存里，用完即弃）
+			if (!this.pasteCode) this.photo = null
+		},
+
+		/**
+		 * 图库辅助录入（阶段 C）：从相机或相册取一张标签照片，放大看清数字后，
+		 * 在浮层下方用同一个多行面板人工录入。**本机不做自动识别**（没有原生 OCR），
+		 * 所以这里如实提示"照着照片读数"，不做无法兑现的承诺。
+		 */
+		openAlbumAssist() {
+			if (!this.batch) return
+			if (this.wizard.phase !== PHASE.PARTICLE) {
+				this.event = eventOf(EVENT.WRONG_STATE, '图库辅助录入只在粒子环节可用。', false)
+				return
+			}
+			uni.chooseImage({
+				count: 1,
+				sourceType: ['camera', 'album'],
+				// 用原图而不是压缩图：真机实测压缩副本只有 1080x1440，同一张 9 码标签页
+				// 只能解出 6 枚（原图 9 枚全解出）。解码准确性优先，空间由本机临时目录承担。
+				sizeType: ['original'],
+				success: (res) => {
+					const paths = (res && res.tempFilePaths) || []
+					if (!paths.length) {
+						this.event = eventOf('ERROR', '没有拿到图片，请重选。', false)
+						return
+					}
+					this.photo = { path: paths[0], kind: 'particle', rotate: 0, scale: 1, recognizing: false, result: null }
+					this.event = eventOf('PHOTO', '图片已打开：放大看清数字后，在下面输入框里批量录入。', false)
+					// 有 OCR 插件就自动识别（识别结果只做候选，必须操作员确认才写槽位）
+					this.runOcrAssist(paths[0])
+				},
+				fail: (error) => {
+					const message = (error && error.errMsg) || '选择图片失败'
+					if (/cancel/i.test(message)) return
+					this.event = eventOf('ERROR', `选择图片未成功：${message}`, false)
+				}
+			})
 		},
 
 		openSlot(boxIndex, canIndex, slotIndex) {
@@ -1466,13 +1967,40 @@ export default {
 				code: (can.particles || [])[slotIndex] || ''
 			}
 			this.replaceValue = ''
+			this.slotSubmitting = false
 		},
 
+		/**
+		 * 槽位「填入 / 替换」（阶段 A）：
+		 *   1. 先用 particleInput 解析：13 位补前缀、20 位原样、其余判非法；
+		 *   2. 空输入 / 非法 → **Toast 提示且弹窗保持打开**（旧实现无条件关窗，操作员以为没反应）；
+		 *   3. 合法才写库：空槽走 fillSlot()，已填槽走 replaceSlot()，两者都带全批次去重；
+		 *   4. 只有写入成功才关窗，并带防连点标志。
+		 */
 		doReplace() {
 			if (!this.editing) return
+			if (this.slotSubmitting) return
+			const parsed = normalizeParticleCode(this.replaceValue)
+			if (!parsed.ok) {
+				// Toast 会自己消失，所以同时写进页面事件条（操作员回头还能看到原因）
+				this.event = eventOf('ERROR', parsed.message, false)
+				uni.showToast({ title: parsed.message, icon: 'none' })
+				return
+			}
 			const { boxIndex, canIndex, slotIndex } = this.editing
-			this.handle(replaceSlot(this.batch, boxIndex, canIndex, slotIndex, this.replaceValue))
-			this.editing = null
+			this.slotSubmitting = true
+			const target = this.editing.code ? replaceSlot : fillSlot
+			const result = target(this.batch, boxIndex, canIndex, slotIndex, parsed.code)
+			this.slotSubmitting = false
+			const ok = result.event && result.event.code === EVENT.OK
+			this.handle(result)
+			if (ok) {
+				this.editing = null
+				this.replaceValue = ''
+				return
+			}
+			// 失败：弹窗保持打开，Toast 说清原因（重复 / 越界 / 状态不对）
+			uni.showToast({ title: (result.event && result.event.message) || '未写入，请检查后重试', icon: 'none' })
 		},
 
 		doDelete() {
@@ -1502,6 +2030,193 @@ export default {
 				uni.showToast({ title: '当前为离线模式，数据将保存在本机', icon: 'none' })
 			} finally {
 				this.busy = false
+			}
+		}
+	}
+}
+</script>
+
+<!--
+	renderjs 视图层解码器（R1）
+
+	为什么必须放视图层：真机实测 `readBarcodes()` 在服务层（JSCore）永不返回
+	（12MP / 3.4MP / 800px 全卡 >35s，Node 同算法 97~171ms），因为服务层没有
+	Blob / Image / canvas / createImageBitmap。视图层是完整浏览器环境，同一套代码可用。
+
+	职责边界（与业务解耦）：
+	   图片（data URL）→ createImageBitmap(按 EXIF 方向) → canvas 取像素 → zxing-wasm 解码
+	   → 回传 [{text,left,top,right,bottom,source:'barcode'}] + 各阶段耗时
+	   业务规则（前缀/13·20 位/去重/槽位）一律不在这里做，全部回到服务层 JS。
+
+	wasm 不走网络也不 fetch file://：由服务层用 plus.io 读成 base64 传进来，
+	以 `wasmBinary` 注入（模块作用域单例缓存，只注入一次）。
+-->
+<script module="imageDecoder" lang="renderjs">
+import { readBarcodes, prepareZXingModule, setZXingModuleOverrides } from '../../services/zxing/reader.js'
+
+/** wasm 二进制：只在第一次任务时注入（之后复用，不再重复初始化）。 */
+let wasmBinaryCache = null
+let wasmReady = null
+let wasmInitMs = 0
+
+/** data URL → ArrayBuffer（纯 JS，视图层有 atob，但保持与另一条路径一致的实现）。 */
+function dataUrlToBytes(dataUrl) {
+	const clean = String(dataUrl || '').replace(/^data:[^,]*,/, '').replace(/[^A-Za-z0-9+/=]/g, '')
+	const binary = atob(clean)
+	const bytes = new Uint8Array(binary.length)
+	for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+	return bytes
+}
+
+/** 懒加载 + 单例：wasm 只注入/实例化一次。 */
+function ensureWasm(base64) {
+	if (base64 && !wasmBinaryCache) wasmBinaryCache = dataUrlToBytes(base64).buffer
+	if (!wasmReady) {
+		if (!wasmBinaryCache) return Promise.reject(new Error('wasm 尚未注入'))
+		const started = Date.now()
+		const overrides = { wasmBinary: wasmBinaryCache, locateFile: (file) => file }
+		setZXingModuleOverrides(overrides)
+		// 说明：打包后的 renderjs chunk 里 `prepareZXingModule` 的具名导入可能取不到
+		// （实测返回 undefined → "Cannot read properties of undefined (reading 'then')"）。
+		// 这里改为：只设置 overrides，让 zxing-wasm 在第一次 readBarcodes 时按需初始化 ——
+		// 这也是它官方推荐的用法（overrides 在模块初始化时生效）。
+		const prepared = typeof prepareZXingModule === 'function' ? prepareZXingModule({ overrides }) : null
+		wasmReady = Promise.resolve(prepared).then(() => {
+			wasmInitMs = Date.now() - started
+			return true
+		})
+	}
+	return wasmReady
+}
+
+/**
+ * 图片 → ImageData。
+ * createImageBitmap 的 `imageOrientation:'from-image'` 顺便把 EXIF 方向归一（R6）：
+ * 竖拍照片（orientation 6/8）在像素层面就被转正，避免解码失败。
+ * 目标尺寸按最长边限制（默认 2400），缩放在 canvas 绘制时完成，比在 JS 里手写采样快。
+ */
+async function imageToImageData(imageDataUrl, maxSide) {
+	const response = await fetch(imageDataUrl)
+	const blob = await response.blob()
+	let bitmap = null
+	let oriented = false
+	try {
+		bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' })
+		oriented = true
+	} catch (error) {
+		bitmap = await new Promise((resolve, reject) => {
+			const image = new Image()
+			image.onload = () => resolve(image)
+			image.onerror = () => reject(new Error('图片加载失败'))
+			image.src = imageDataUrl
+		})
+	}
+	const sourceWidth = bitmap.width || bitmap.naturalWidth || 0
+	const sourceHeight = bitmap.height || bitmap.naturalHeight || 0
+	if (!sourceWidth || !sourceHeight) throw new Error('拿不到图片尺寸')
+	const scale = Math.min(1, (maxSide || 2400) / Math.max(sourceWidth, sourceHeight))
+	const width = Math.max(1, Math.round(sourceWidth * scale))
+	const height = Math.max(1, Math.round(sourceHeight * scale))
+	const canvas = document.createElement('canvas')
+	canvas.width = width
+	canvas.height = height
+	const context = canvas.getContext('2d')
+	context.fillStyle = '#ffffff'
+	context.fillRect(0, 0, width, height)
+	context.drawImage(bitmap, 0, 0, width, height)
+	const pixels = context.getImageData(0, 0, width, height)
+	const result = { data: pixels.data, width, height, sourceWidth, sourceHeight, oriented, scale }
+	// 视图层 canvas 显式释放，避免内存累积（R1 注意事项）
+	canvas.width = 0
+	canvas.height = 0
+	if (bitmap && typeof bitmap.close === 'function') bitmap.close()
+	return result
+}
+
+export default {
+	methods: {
+		/**
+		 * 服务层通过 :change:prop 触发（每次任务带唯一 taskId，避免重复执行）。
+		 * task = { taskId, imageBase64, wasmBase64, maxSide, formats, maxNumberOfSymbols, expectedCount }
+		 */
+		async onTaskChange(task) {
+			if (!task || !task.taskId) return
+			if (this.currentTaskId === task.taskId) return
+			this.currentTaskId = task.taskId
+			const timings = { wasmInitMs: 0, wasmReuse: !!wasmReady, imageDecodeMs: 0, barcodeDecodeMs: 0 }
+			try {
+				await ensureWasm(task.wasmBase64)
+				timings.wasmInitMs = wasmInitMs
+				timings.wasmReuse = !!task.wasmBase64 ? false : true
+				const decodeStart = Date.now()
+				const image = await imageToImageData(task.imageBase64, task.maxSide)
+				timings.imageDecodeMs = Date.now() - decodeStart
+				timings.imageWidth = image.width
+				timings.imageHeight = image.height
+				timings.oriented = image.oriented
+				const barcodeStart = Date.now()
+
+				const results = await readBarcodes(
+					{ data: image.data, width: image.width, height: image.height },
+					{
+						formats: task.formats || ['Code128'],
+						maxNumberOfSymbols: task.maxNumberOfSymbols || 64,
+						tryHarder: true
+					}
+				)
+				timings.barcodeDecodeMs = Date.now() - barcodeStart
+				// 调试信息（真机排查用）：像素是否真的有内容、条码引擎回了什么
+				const debug = {
+					iw: image.width,
+					ih: image.height,
+					oriented: image.oriented,
+					pixels: image.data ? image.data.length : 0,
+					raw: (Array.isArray(results) ? results : []).length
+				}
+				if (image.data && image.data.length) {
+					let sum = 0
+					const step = Math.max(4, Math.floor(image.data.length / 4000 / 4) * 4)
+					let samples = 0
+					for (let index = 0; index < image.data.length; index += step) {
+						sum += image.data[index]
+						samples += 1
+					}
+					debug.meanR = Math.round(sum / Math.max(1, samples))
+				}
+				const codes = (Array.isArray(results) ? results : [])
+					.filter((item) => item && typeof item.text === 'string' && item.text !== '')
+					.map((item) => {
+						const corners = item.position
+							? [item.position.topLeft, item.position.topRight, item.position.bottomRight, item.position.bottomLeft]
+							: []
+						const xs = corners.map((point) => Number(point && point.x)).filter((value) => Number.isFinite(value))
+						const ys = corners.map((point) => Number(point && point.y)).filter((value) => Number.isFinite(value))
+						const box =
+							xs.length && ys.length
+								? {
+										left: Math.round(Math.min.apply(null, xs) / image.scale),
+										top: Math.round(Math.min.apply(null, ys) / image.scale),
+										right: Math.round(Math.max.apply(null, xs) / image.scale),
+										bottom: Math.round(Math.max.apply(null, ys) / image.scale)
+									}
+								: null
+						return Object.assign({ text: item.text, source: 'barcode' }, box || {})
+					})
+				this.$ownerInstance.callMethod('onDecodeResult', {
+					taskId: task.taskId,
+					ok: true,
+					codes,
+					timings,
+					debug
+				})
+			} catch (error) {
+				this.$ownerInstance.callMethod('onDecodeResult', {
+					taskId: task.taskId,
+					ok: false,
+					message: (error && error.message) || String(error),
+					codes: [],
+					timings
+				})
 			}
 		}
 	}
@@ -1759,6 +2474,69 @@ export default {
 	border: 1rpx solid #d6dee3;
 	border-radius: 8rpx;
 	font-size: 26rpx;
+}
+
+/*
+	多行批量录入框（手动粘贴 / 图库辅助共用）：
+	改成 textarea 后高度要放开，否则会沿用 .input 的 76rpx 单行高度，粘贴 6 个序列号只能看到一行。
+	uni-app 里 textarea 外层是 <uni-textarea>、内层才是真实 textarea，两层都要约束。
+*/
+.batch-input {
+	height: auto;
+	min-height: 170rpx;
+	padding: 16rpx 20rpx;
+	line-height: 1.6;
+}
+
+.batch-input .uni-textarea-textarea {
+	min-height: 140rpx;
+	line-height: 1.6;
+}
+
+/*
+	OCR 候选列表（阶段 2）：一行一枚候选 = 序号 + 码 + 状态 + 删除。
+	识别失败/无插件时这一段不渲染，浮层里只剩多行手动录入 —— 降级路径必须永远可用。
+*/
+.ocr-head {
+	margin-top: 16rpx;
+}
+
+.ocr-list {
+	margin-top: 12rpx;
+	border: 1rpx solid #e2ebee;
+	border-radius: 12rpx;
+	background: #f7fafb;
+}
+
+.ocr-row {
+	display: flex;
+	align-items: center;
+	padding: 12rpx 16rpx;
+	border-bottom: 1rpx solid #e8eff2;
+}
+
+.ocr-row:last-child {
+	border-bottom: none;
+}
+
+.ocr-index {
+	width: 44rpx;
+	color: #8697a3;
+	font-size: 24rpx;
+}
+
+.ocr-code {
+	flex: 1;
+	font-size: 24rpx;
+	margin-right: 10rpx;
+}
+
+.ocr-del {
+	margin: 0 0 0 10rpx;
+	padding: 0 16rpx;
+	font-size: 22rpx;
+	line-height: 1.8;
+	background: #ffffff;
 }
 
 .box-group {

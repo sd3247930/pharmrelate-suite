@@ -1,4 +1,4 @@
-# 籽关通 Android 采集端（uni-app）· v1.4.1
+# 籽关通 Android 采集端（uni-app）· v1.4.4
 
 > 路线：HBuilderX + uni-app（**不是 Capacitor**）
 > 状态：**多箱包装结构 · 本地驱动 · 引导式 · 离线可用 · 箱号扫条码 / 罐号扫二维码**
@@ -270,6 +270,25 @@ v1.3.2 的「箱/罐 = 短号 1~9999」口径已**彻底作废**（现场实物�
 
 ## 三之四、批量连续扫码 · 虚拟箱 · 去重（并入 v1.4.0）
 
+### 3.4.0 批次基础信息：四个字段与日期口径（v1.4.3）
+
+设置页「批次基础信息」从上到下固定为：
+
+| 字段 | 绑定 | 是否导出 | 说明 |
+| --- | --- | --- | --- |
+| 批号（必填） | `batchNo` | ✅ | 例如 20260927 |
+| **生产日期（必填）** | `produceDate` | ✅ → XML `madeDate` | **属性名一个字没动**（黄金基准字节级冻结） |
+| **标识日期（必填）** | `identityDate` | ❌ **只存本机** | 2026-10-02 新增；XML 只有 `madeDate`/`validateDate` 两个日期位，装不下第三个 |
+| 有效期（必填，需大于标识日期） | `expireDate` | ✅ → XML `validateDate` | 选标识日期时自动 = 标识日期 + 60 天 |
+
+- 界面文案：原「标示日期」按业务拍板改为**「标识日期」**（示 → 识）；原 `produceDate` 显示为「生产日期」。
+- **老批次兼容**：v1.4.3 之前建的批次没有 `identityDate`，打开设置页**不报错**、能照常保存；
+  只有**新建批次**才强制填生产日期与标识日期（`validateBaseInfo(input, { requireIdentityDate })`）。
+- 有效期比较锚点：填了标识日期就比标识日期（新口径，错误码 `EXPIRE_NOT_AFTER_IDENTITY`），
+  老批次没有标识日期则回退成与生产日期比（`EXPIRE_NOT_AFTER_PRODUCE`）—— 老数据行为不变。
+- 四个控件用同一套 `.field-label` + `.input code`（日期用 `picker` + `.picker-value`），
+  真机实测高度/字号/圆角/边框四项完全一致。
+
 ### 3.4.1 批量连续扫码（`plus.barcode`）—— 启动链收在 `utils/batchBarcodeScanner.js`
 
 粒子环节的「**批量连续扫码**」用 `plus.barcode` 常驻原生控件连续取景。为什么不能沿用
@@ -349,6 +368,80 @@ v1.3.2 的「箱/罐 = 短号 1~9999」口径已**彻底作废**（现场实物�
 
 ### 3.4.4 漏扫提示与「本罐先结束」
 
+### 3.4.4b 手动补录 · 批量录入 · 图库辅助（v1.4.2）
+
+现场三类"没扫上"的情况都靠人工兜底：漏扫、标签破损、别人发来的标签照片。
+
+**① 槽位弹窗升级为「填 / 改」通用**（`pages/scan/scan.vue` + `services/particleInput.js`）
+
+| 行为 | 口径 |
+| --- | --- |
+| 空槽位 | 弹窗标题标「补录」，按钮是「填入」→ 调 `fillSlot()` 写进**指定槽位** |
+| 已填槽位 | 按钮是「替换」→ 调 `replaceSlot()`（原逻辑） |
+| 输入 13 位序列号 | 自动补前缀 `8206233` 成完整 20 位（`normalizeParticleCode`） |
+| 输入完整 20 位 | 前缀正确则**原样**写入，绝不重复加前缀；前缀错误直接拦 |
+| 输入 27 位（前缀敲两遍） | 去掉多余那一遍前缀后按 20 位校验（可审计的确定性规则，不做猜测） |
+| 空输入 / 含字母 / 长度不对 | Toast + **弹窗保持打开**（旧实现无条件关窗，操作员以为没反应） |
+| 重复码 | `findUsage` 全批次查重 → Toast 说明「已被使用于箱 X 罐 Y / 槽位 Z」，不覆盖 |
+
+**② 批量手动录入**（`fillParticleCodesIntoEmptySlots()`，与将来的 OCR 共用同一条入口）
+
+- 输入框改为多行 `textarea`，支持空格 / 换行 / Tab / 中英文逗号 / 中英文分号 / 顿号分隔；
+- 一次可粘贴 6 个以上序列号，13 位自动补前缀；
+- 去重三层：输入内重复、与本罐已有码重复、跨罐重复（都汇总成一句话，不连弹几十个 Toast）；
+- **溢出策略改为「能填的先填」**：超出的码明确列出「超出计划 N 枚未写入」，并把未写入的码**留在输入框里**供复制；
+  扫码通道仍保持原有的「整帧拒绝」策略（防误读帧写成半截数据）；
+- 计划粒子数**不会**被批量录入撑大。
+
+**③ 图库辅助录入（v1.4.2 人工读数；v1.4.3 可降级 OCR；v1.4.4 起本机自动识别条码）**
+
+- 「拍照识别」的 `sourceType` 从 `['camera']` 扩到 `['camera','album']`：箱号/罐号可以直接选图库照片；
+- 粒子相位的手动输入卡里新增「🖼 从图库选图辅助录入」，弹「拍摄 / 从相册选择」面板，
+  选图后进大图浮层（放大 / 缩小 / 旋转 / 复位），**下面就是同一个多行批量录入框**；
+- **v1.4.4 起**：选图后本机会**自动解码标签上的 Code 128 条码**（renderjs 视图层 +
+  zxing-wasm，纯离线、不装插件），结果进候选列表，操作员确认后才写槽位（见 ⑤）；
+  端侧 OCR 仍然没有（无原生插件、无模型），条码没解出来的部分照旧手动录入。
+  照片只在页面内存里、用完即弃。
+
+**⑤ 本机条码自动识别（v1.4.4：renderjs 视图层 + zxing-wasm，免插件）**
+
+链路：`图库选图 → 服务层读成 data URL → renderjs 视图层解码 → 候选列表 → 人工确认 → fillParticleCodesIntoEmptySlots()`
+
+为什么在视图层：`readBarcodes()` 在 **DCloud JSCore 服务层永不返回**（实测 12MP / 3.4MP / 800px 全卡 >35 秒），
+因为服务层没有 `Blob` / `Image` / `canvas` / `createImageBitmap`；同一套算法在 Node 侧 171ms 出结果。
+renderjs 是完整浏览器环境，换过去以后真机 9 码标签页 349ms 全中。
+
+| 层 | 位置 | 职责 |
+| --- | --- | --- |
+| 视图层解码器 | `pages/scan/scan.vue` 的 `<script module="imageDecoder" lang="renderjs">` | dataURL → `createImageBitmap`（顺带 EXIF 归一）→ canvas 取像素 → `readBarcodes()` → `$ownerInstance.callMethod('onDecodeResult', …)` |
+| 服务层支撑 | `services/imageCodeDecoder.js` | 图片读 data URL（带"先复制进沙箱"兜底）、wasm 读 base64（单例缓存）、`buildDigitRoi()` 纯函数、开关与超时常量 |
+| 引擎 | `static/zxing/zxing_reader.wasm`（931KB）+ `services/zxing/reader.js` | zxing-wasm 3.1.4（MIT）；wasm 用 `setZXingModuleOverrides({ wasmBinary })` 注入，**不 fetch** |
+| 业务 | `pages/scan/scan.vue` | `expectedCount = 当前罐剩余空槽位`；够数立即停、不调 OCR；全流程只出候选，绝不直接写槽位 |
+
+三条兜底（都不会卡界面）：条码够数 → 直接用；不够 → 试 ML Kit OCR（标准基座没有就跳过，不算失败）；
+都没有 → 如实说明原因 + 手动录入。**硬超时 12 秒**（`DECODER_TIMEOUT_MS`），5 秒软超时先改文案让人可以提前手输。
+
+`IMAGE_CODE_DECODER_ENABLED` 是总开关，置 `false` 即整体退回纯手动录入。
+真机验收见 `private/测试输出/Android-v1.4.4-免插件条码解码-20261002/真机测试报告-renderjs条码解码.md`。
+
+**④ 离线 OCR（v1.4.3：可降级桥接 + UTS 插件骨架）**
+
+链路：`图库选图 → 离线 OCR（可选）→ 候选列表人工确认 → 同一个批量写入出口`。
+
+| 层 | 文件 | 说明 |
+| --- | --- | --- |
+| 桥接 | `services/ocr.js` | 先试 nativeplugins 实例、再试 UTS 模块；**都没有 → `OCR_PLUGIN_MISSING`**，页面切手动录入，不报错、不阻断 |
+| 解析（纯函数，已单测） | `services/particleInput.js` → `parseOcrParticleCandidates()` | 抽数字 → **按 bounding box 重排**（ML Kit 已知顺序错乱）→ `normalizeParticleCode()` → 分类 `{valid, duplicateInInput, duplicateInCurrentBatch, invalid}` |
+| 写入 | `localBatch.fillParticleCodesIntoEmptySlots()` | **OCR 绝不直接写槽位**，必须操作员确认后走这个唯一出口 |
+| 插件 | `uni_modules/pharmrelate-ocr/` | UTS 骨架 + `com.google.mlkit:text-recognition:16.0.1`（bundled，离线，+≈4MB），**源码未编译** |
+
+真机实测（标准基座＝无插件）：状态徽标显示「无 OCR 插件」，多行手动录入照常可用 ✔。
+选图后的 `imagePath` 形态：**`file://` + 应用私有目录真实路径**
+（uni-app 会把选中的图压缩复制到 `.../doc/uniapp_temp/compressed/<时间戳>_<原名>.jpg`），
+**不是 `content://`** —— 插件里的 `toUri()` 因此按 file 路径处理（见 UTS 源码注释）。
+
+三条采集通道（单次扫码 / 批量连续扫码 / 拍照识别）全部保留，人工入口只增不减。
+
 - 粒子相位顶部有**高亮警告条**：`⚠️ 可能漏扫：当前已扫 X 个，还差 Y 个未扫描`；
 - 新增「**本罐先结束**」按钮：没扫满时弹二次确认，确认后由 `forceEndCan()` 收尾。
 
@@ -404,9 +497,12 @@ android/
 │   └── store.js           服务地址、设备指纹
 ├── utils/
 │   └── batchBarcodeScanner.js  ★ 批量连续扫码启动链（create/append/start 循环、状态机、瞬时防抖、释放）
+├── services/particleInput.js   ★ 粒子码手动录入解析层（13 位补前缀 / 20 位原样 / 双前缀剥离 / 批量分隔符）
 ├── tests/
 │   ├── localBatch.test.mjs          本地数据层单测
 │   ├── batchBarcodeScanner.test.mjs 扫码启动链单测（假 plus 驱动，PC 上就能验状态机与重启）
+│   ├── particleInput.test.mjs       手动录入解析层单测（前缀规则 / 分隔符 / 去重分类）
+│   ├── slotFill.test.mjs            槽位补录与批量录入单测（fillSlot / 部分溢出 / 撤销）
 │   ├── numberRecognizer.test.mjs    识别契约层单测
 │   └── xmlGenerator.test.mjs        XML 生成器单测（与后端黄金基准字节级比对）
 └── unpackage/             构建产物（已 gitignore）
@@ -441,11 +537,15 @@ powershell -ExecutionPolicy Bypass -File scripts\serve-lan.ps1
 ## 七、测试与验收证据
 
 ```powershell
-# 单测共 474 项：本地数据层 250 + 识别契约层 66 + XML 生成器 57 + 扫码启动链 101
+# 单测共 656 项：本地数据层 260 + 识别契约层 66 + XML 生成器 57 + 扫码启动链 101
+#              + 手动录入解析 63 + 槽位补录/批量录入 59 + OCR 候选 50
 # （Node 直跑，无需 HBuilderX；扫码启动链用假 plus + 假定时器驱动，真机只验摄像头行为）
 cd "<ANDROID_PROJECT_DIR>"
 node tests/localBatch.test.mjs
 node tests/batchBarcodeScanner.test.mjs
+node tests/particleInput.test.mjs
+node tests/slotFill.test.mjs
+node tests/ocrCandidates.test.mjs
 ```
 
 H5 / 真机端到端脚本与截图在
@@ -665,3 +765,61 @@ H5 / 真机端到端脚本与截图在
 - [x] 逐枚耗时采集：记录每枚**成功入库**的时间戳，收工时连同 `intervalMs` 数组落盘
       `pharmrelate.batchscan.lastRun`，压测脚本用 `--read-only` 直接读出来出报告
 - [ ] 防抖放宽到 2.5 秒后的真机复跑（54 枚标签，目标：业务重复 <10 次、无丢码、平均间隔 ≤5 秒）
+
+### 条码解码迁移至 renderjs 视图层（v1.4.4，2026-10-02）
+
+- [x] 解码本体从服务层搬到 **renderjs 视图层**：`scan.vue` 内联 `module="imageDecoder"` + `<view class="decoder-bridge" :change:prop>`，
+      结果经 `$ownerInstance.callMethod('onDecodeResult', …)` 回服务层（业务链路一行没改）
+- [x] wasm 注入仍是"服务层 `plus.io` 读 base64 → `setZXingModuleOverrides({ wasmBinary })`"，**不 fetch**；
+      打包后 `prepareZXingModule` 具名导入取不到，改为靠 `readBarcodes()` 首次调用惰性初始化
+- [x] 删除 `services/zxing/jpegDecoder.js`（视图层用 `createImageBitmap` 解图，不再需要纯 JS JPEG 解码）
+- [x] R2 分段计时落盘 `pharmrelate.batchscan.lastDecode`：
+      `loadImageMs / imageDecodeMs / barcodeDecodeMs / wasmInitMs / wasmReuse / parseMs / ocrMs / totalMs` + debug（宽高/朝向/像素/均值）
+- [x] R3 `expectedCount = currentCanPlanned − currentCanScanned`：为 0 直接跳过自动识别（提示"当前罐已满"），够数不调 OCR
+- [x] R4 `buildDigitRoi()` 纯函数（条码框 → 下方数字 ROI）+ 单测；ML Kit 运行时部分标注**待自定义基座真机验证**
+- [x] R5 `mergeAdjacentDigitBlocks()`：同行 + 相邻 + 合并后恰好 13/20 位才接受，保留 `mergedFrom`，**不猜字符、不补零**
+- [x] R6 EXIF 归一走 `createImageBitmap(blob, { imageOrientation: 'from-image' })`；真机竖拍 3072×4096 实测 `oriented:true`
+- [x] R7 状态机 `decoding / success / partial / timeout / unavailable`；5s 软超时改文案、12s 硬超时兜底；任何异常都落到"候选 + 手动补录"
+- [x] `DECODER_MAX_SIDE` 定 4096：2400px 时 9 码标签页只能解 8 枚，原分辨率全中；条码解码本体只要 9~56ms，性能不是瓶颈
+- [x] 单测 **700 项全过**（新增 imageDecoder 22 项：ROI / 候选归一 / EXIF 归一）；`scripts/check-uniapp.ps1` 通过
+- [x] 真机验收（荣耀 BKQ-AN90 / Android 16 / 标准基座）**T1~T13 全过**：
+      9 码标签页 **9/9（349ms，端到端 578ms）**、24 码 **22/24（344ms）**、6 码 **6/6（352ms）**、
+      倾斜 8° 5 枚、反光 7 枚（含 1 枚合成过曝伪码，见报告 §4）、远距离 5 枚；
+      识别率 100%（T5）/ 91.7%（T6），错误识别率 1.7%（≤5% 达标）
+- [x] 异常与降级实测：损坏图片 690ms 出「解码失败」+ 手动录入可用；
+      **故障注入**把硬超时临时改 250ms → 命中「自动识别超时」分支且不卡界面（改回 12000 后复跑 T1~T4 全通）
+- [x] 离线实测：WebView 置离线（`navigator.onLine=false`）后仍 9/9，全程 **0 条 http(s) 请求**
+- [x] 生命周期实测：选图后切 Tab 往返，两页正常、未捕获异常 0 条
+- [ ] 物理飞行模式真机复跑（本机是 ADB-over-Wi-Fi，开飞行模式会断掉唯一调试链路；建议 USB 连接下补）
+- [x] 证据：`private/测试输出/Android-v1.4.4-免插件条码解码-20261002/真机测试报告-renderjs条码解码.md`
+      （含 T1~T13 表格、分段耗时、12 张截图、`device-*.mjs` 复现脚本）
+
+### 批次基础信息四字段 + 图库离线 OCR 可降级（v1.4.3，2026-10-02）
+
+- [x] 设置页字段顺序固定为：批号 → **生产日期** → **标识日期** → 有效期（四个控件几何实测一致）
+- [x] 文案「标示日期」→「标识日期」；`produceDate` 显示为「生产日期」，**XML `madeDate` 属性名未动**
+- [x] 新增本机字段 `identityDate`（标识日期），**只存不导出**；有效期自动 = 标识日期 + 60 天
+- [x] 老批次（无 `identityDate`）打开设置页不报错、可照常保存；只有新批次强制填两个日期
+- [x] 新增 `services/ocr.js` 可降级桥接：无插件 → `OCR_PLUGIN_MISSING` → 手动录入（真机实测 ✔）
+- [x] 新增 `parseOcrParticleCandidates()`：bbox 重排 + 标准化 + 三层分类（`tests/ocrCandidates.test.mjs` 50 项）
+- [x] 新增 `uni_modules/pharmrelate-ocr/` UTS 插件骨架（ML Kit 16.0.1 bundled，minSdk 21 无需提升）
+- [x] 真机实测 imagePath = `file://…/doc/uniapp_temp/compressed/…jpg`（**不是 content://**）
+- [x] 单测 **656 项全过**（新增 ocrCandidates 50 项、localBatch 基础信息 10 项）
+- [x] UTS 插件**未编译**（本机无 DCloud 离线 SDK），编译与真机 PoC 由业务方打包后执行
+
+### 手动补录 · 批量录入 · 图库辅助（v1.4.2，2026-10-02）
+
+- [x] 槽位弹窗升级为「填 / 改」通用：空槽位走 `fillSlot()`，已填槽位走 `replaceSlot()`
+- [x] 13 位序列号自动补前缀 `8206233`；20 位码原样写入（不重复加前缀）；双前缀可剥离
+- [x] 空输入 / 含字母 / 长度不对：Toast + **弹窗保持打开**（不再无条件关窗）
+- [x] 重复码走 `findUsage` 全批查重，提示「已被使用于箱 X 罐 Y / 槽位 Z」，不覆盖原槽位
+- [x] 批量录入改多行 `textarea`，支持空格/换行/Tab/中英文逗号分号/顿号，一次可粘 6+ 个
+- [x] 批量溢出改为「能填的先填」+「超出计划 N 枚未写入」明示，未写入的码留在输入框里
+- [x] 扫码通道的「整帧拒绝」策略保持不变（两套策略各管一条通道，边界写清楚）
+- [x] 计划粒子数不会被批量录入撑大（单测锁定）
+- [x] 拍照识别 `sourceType` 扩为 `['camera','album']`；粒子相位新增「🖼 从图库选图辅助录入」
+- [x] 图库浮层：大图 + 放大/缩小/旋转/复位 + 同一个多行录入框；**不承诺自动识别**（本机无端侧 OCR）
+- [x] 单测 596 项全过（新增 `particleInput.test.mjs` 63 项、`slotFill.test.mjs` 59 项）
+- [x] 真机实测（荣耀 BKQ-AN90）7 项全过：图库选择面板、空槽补录、13 位补前缀、
+      空输入不关窗、20 位原样、重复码拦截、批量粘贴填满 6 槽、罐满提示
+      证据：`private/测试输出/Android-v1.4.2-手动补录与批量录入-20261002/`

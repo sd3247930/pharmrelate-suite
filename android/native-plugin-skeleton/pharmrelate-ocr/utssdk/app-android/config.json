@@ -1,0 +1,6 @@
+{
+  "minSdkVersion": 21,
+  "dependencies": [
+    "com.google.mlkit:text-recognition:16.0.1"
+  ]
+}

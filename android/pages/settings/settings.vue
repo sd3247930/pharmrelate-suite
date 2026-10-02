@@ -14,12 +14,17 @@
 			<text class="field-label">批号（必填）</text>
 			<input class="input code" v-model="form.batchNo" placeholder="例如 20260927" />
 
-			<text class="field-label">标示日期（必填）</text>
+			<text class="field-label">生产日期（必填）</text>
 			<picker mode="date" :value="form.produceDate" @change="onProduceDate">
-				<view class="input code picker-value">{{ form.produceDate || '请选择标示日期' }}</view>
+				<view class="input code picker-value">{{ form.produceDate || '请选择生产日期' }}</view>
 			</picker>
 
-			<text class="field-label">有效期（必填，需大于标示日期）</text>
+			<text class="field-label">标识日期（必填）</text>
+			<picker mode="date" :value="form.identityDate" @change="onIdentityDate">
+				<view class="input code picker-value">{{ form.identityDate || '请选择标识日期' }}</view>
+			</picker>
+
+			<text class="field-label">有效期（必填，需大于标识日期）</text>
 			<picker mode="date" :value="form.expireDate" @change="onExpireDate">
 				<view class="input code picker-value">{{ form.expireDate || '请选择有效期' }}</view>
 			</picker>
@@ -253,7 +258,7 @@ export default {
 			fixedOpen: false,
 			localId: '',
 			localStatus: 'draft',
-			form: { batchNo: '', produceDate: '', expireDate: '' },
+			form: { batchNo: '', produceDate: '', identityDate: '', expireDate: '' },
 			// 箱 → 罐 → 粒子数字符串（boxPlan[0] = 第 1 箱的每罐粒子数）
 			boxPlan: [['']],
 			// 界面选的「纸箱数」。0 = 本次不扫箱号（落库时生成虚拟箱）。
@@ -353,6 +358,7 @@ export default {
 			this.form = {
 				batchNo: batch.batchNo,
 				produceDate: batch.produceDate,
+				identityDate: batch.identityDate || '',
 				expireDate: batch.expireDate
 			}
 			// 结构已保存过 → 以本地批次为准；草稿还没保存过 → 保留用户正在输入的
@@ -374,13 +380,19 @@ export default {
 
 		onProduceDate(event) {
 			this.form.produceDate = event.detail.value
-			// 有效期默认给**标示日期 + 60 天**（业务拍板 2026-09-29）：
-			// 否则操作员很容易选成同一天，被「有效期必须大于标示日期」挡住而不知道为什么。
-			// 手动改过有效期就不再覆盖（下面的 current <= produceDate 判断是唯一的覆盖条件）。
-			// 注意：界面叫「标示日期」，XML 属性名仍是 madeDate，不动。
+			// 生产日期只负责落库（XML madeDate）；有效期不再由它推导 —— 见 onIdentityDate。
+		},
+
+		/**
+		 * 标识日期（只存本机、不导出）：有效期默认给**标识日期 + 60 天**
+		 * （业务拍板 2026-10-02 起基准改为标识日期；2026-09-29 的 +60 规则本身不变）。
+		 * 手动改过有效期就不再覆盖（current <= identityDate 是唯一的覆盖条件）。
+		 */
+		onIdentityDate(event) {
+			this.form.identityDate = event.detail.value
 			const current = this.form.expireDate
-			if (!current || current <= this.form.produceDate) {
-				this.form.expireDate = addDays(this.form.produceDate, 60)
+			if (!current || current <= this.form.identityDate) {
+				this.form.expireDate = addDays(this.form.identityDate, 60)
 			}
 		},
 
@@ -395,7 +407,11 @@ export default {
 		 * 冲回默认的 1 罐 0 粒，接着结构校验必然失败、跳转被拦下。
 		 */
 		persistBaseInfo() {
-			const issues = validateBaseInfo(this.form)
+			const existing = getActiveBatch()
+			// 新建批次：生产日期 + 标识日期都要填；老批次（从来没有标识日期）：不强制补填
+			const issues = validateBaseInfo(this.form, {
+				requireIdentityDate: !existing || !!existing.identityDate
+			})
 			if (issues.length) {
 				uni.showModal({
 					title: '基础信息不完整',
@@ -404,7 +420,6 @@ export default {
 				})
 				return false
 			}
-			const existing = getActiveBatch()
 			if (!existing) {
 				saveBatch(createDraft({ ...this.form, deviceId: this.device.fingerprint }))
 			} else if (existing.status === 'draft') {
@@ -558,7 +573,7 @@ export default {
 					if (!res.confirm) return
 					removeBatch(target)
 					this.refreshLocal()
-					this.form = { batchNo: '', produceDate: '', expireDate: '' }
+					this.form = { batchNo: '', produceDate: '', identityDate: '', expireDate: '' }
 					this.boxPlan = [['']]
 					uni.showToast({ title: '已删除', icon: 'success' })
 				}
@@ -576,7 +591,7 @@ export default {
 					if (!res.confirm) return
 					clearAll()
 					this.refreshLocal()
-					this.form = { batchNo: '', produceDate: '', expireDate: '' }
+					this.form = { batchNo: '', produceDate: '', identityDate: '', expireDate: '' }
 					this.boxPlan = [['']]
 					uni.showToast({ title: '已清空', icon: 'success' })
 				}

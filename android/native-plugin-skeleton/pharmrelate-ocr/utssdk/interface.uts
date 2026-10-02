@@ -1,0 +1,41 @@
+/**
+ * 插件对外接口声明（uni-app UTS 约定：interface.uts 定义类型，平台实现放在 app-android/）。
+ *
+ * 只有两个类型 + 一个方法，保持"插件只负责 图片→文本块"的单一职责：
+ * 业务规则（13 位补前缀、去重、槽位容量）全部在 JS 层，见 services/particleInput.js。
+ */
+
+export type OCRBlock = {
+  /** 识别出的文本（可能是一整行，也可能只是几个字符） */
+  text: string
+  /** bounding box，单位是图片像素；ML Kit 顺序不可靠，调用方要按坐标重排 */
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+export type OCRResult = {
+  success: boolean
+  blocks: OCRBlock[]
+  rawText: string
+  /** 失败时的机器可读错误码（OCR_xxx），成功时为空 */
+  code?: string
+  /** 失败提示（可直接给操作员看） */
+  message?: string
+}
+
+export type OCRImageOptions = {
+  /** 本地图片路径：content:// 或 /storage/... 都接受 */
+  imagePath: string
+}
+
+/**
+ * 识别一张本地图片，返回文本块数组。
+ * 失败统一返回 `{ success:false, code, message }`，不抛异常。
+ */
+export type RecognizeImage = (options: OCRImageOptions) => Promise<OCRResult>
+
+export interface PharmrelateOcr {
+  recognizeImage: RecognizeImage
+}

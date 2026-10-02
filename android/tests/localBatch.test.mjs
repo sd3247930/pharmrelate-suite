@@ -680,6 +680,84 @@ equal(lb.planCounts(draft([[1, 2], [3]])).length, 2, 'planCounts 返回箱维度
 
 // ---------------------------------------------------------------------------
 
+section('基础信息（v1.4.3：生产日期 / 标识日期拆分 + 老批次兼容）')
+// ---------------------------------------------------------------------------
+
+{
+	// 新建批次：标识日期必填
+	const missingIdentity = lb.validateBaseInfo(
+		{ batchNo: 'A', produceDate: '2026-10-02', identityDate: '', expireDate: '2026-12-01' },
+		{ requireIdentityDate: true }
+	)
+	check(
+		missingIdentity.some((item) => item.code === 'IDENTITY_DATE_REQUIRED'),
+		'新建批次缺标识日期 → 报 IDENTITY_DATE_REQUIRED'
+	)
+
+	// 老批次（没有标识日期）：不强制补填，保持原样可通过
+	equal(
+		lb.validateBaseInfo(
+			{ batchNo: 'A', produceDate: '2026-10-02', expireDate: '2026-12-01' },
+			{ requireIdentityDate: false }
+		).length,
+		0,
+		'老批次没有标识日期 → 不报错'
+	)
+
+	// 有效期锚点：填了标识日期就比标识日期（新口径）
+	check(
+		lb.validateBaseInfo(
+			{ batchNo: 'A', produceDate: '2026-10-02', identityDate: '2026-11-01', expireDate: '2026-11-01' },
+			{ requireIdentityDate: true }
+		).some((item) => item.code === 'EXPIRE_NOT_AFTER_IDENTITY'),
+		'有效期等于标识日期 → 拒绝（锚点是标识日期）'
+	)
+	equal(
+		lb.validateBaseInfo(
+			{ batchNo: 'A', produceDate: '2026-10-02', identityDate: '2026-11-01', expireDate: '2026-12-31' },
+			{ requireIdentityDate: true }
+		).length,
+		0,
+		'有效期大于标识日期 → 通过'
+	)
+
+	// 落库：createDraft 存两个日期；produceDate 仍然是 XML madeDate 的来源
+	const created = lb.createDraft({
+		batchNo: 'T-V143',
+		produceDate: '2026-10-02',
+		identityDate: '2026-10-03',
+		expireDate: '2026-12-02',
+		deviceId: 'and-test'
+	})
+	equal(created.produceDate, '2026-10-02', 'createDraft 存生产日期')
+	equal(created.identityDate, '2026-10-03', 'createDraft 存标识日期（本机字段）')
+	equal(created.expireDate, '2026-12-02', 'createDraft 存有效期')
+
+	// updateBaseInfo：已填过标识日期的批次不允许清空
+	const cleared = lb.updateBaseInfo(created, {
+		batchNo: 'T-V143',
+		produceDate: '2026-10-02',
+		identityDate: '',
+		expireDate: '2026-12-02'
+	})
+	check(
+		(cleared.issues || []).some((item) => item.code === 'IDENTITY_DATE_REQUIRED'),
+		'已填过标识日期的批次不允许清空'
+	)
+
+	// 老批次（从来没收过标识日期）可以照常保存
+	const legacy = Object.assign({}, created, { identityDate: undefined, status: 'draft' })
+	const saved = lb.updateBaseInfo(legacy, {
+		batchNo: 'T-V143',
+		produceDate: '2026-10-02',
+		expireDate: '2026-12-02'
+	})
+	equal((saved.issues || []).length, 0, '老批次不带标识日期也能保存')
+	equal(saved.batch.identityDate, '', '保存后标识日期为空串（不塞 undefined）')
+}
+
+// ---------------------------------------------------------------------------
+
 console.log('')
 if (failures.length) {
 	console.log(`未通过 ${failures.length} 项：${failures.join('、')}`)

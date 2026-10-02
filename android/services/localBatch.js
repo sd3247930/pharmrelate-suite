@@ -445,11 +445,22 @@ function issue(code, field, message) {
 	return { severity: 'error', code, field, message }
 }
 
-/** 基础信息校验（阶段 2 的验收点：必填 + 有效期 > 生产日期）。 */
-export function validateBaseInfo(input) {
+/**
+ * 基础信息校验（阶段 2 的验收点：必填 + 有效期 > 日期锚点）。
+ *
+ * 日期口径（业务方 2026-10-02 拍板，方案 A）：
+ *   - `produceDate`（生产日期）→ 导出 XML 的 `madeDate`，属性名一个字不动；
+ *   - `identityDate`（标识日期）→ **只存本机、不导出**，有效期由「标识日期 + 60 天」推导；
+ *   - 老批次没有 `identityDate`（undefined），打开设置页**不报错**，
+ *     所以"标识日期必填"用 `options.requireIdentityDate` 控制，只有新建批次才强制。
+ */
+export function validateBaseInfo(input, options) {
 	const issues = []
+	const settings = options || {}
+	const requireIdentityDate = settings.requireIdentityDate === true
 	const batchNo = String((input && input.batchNo) || '').trim()
 	const produceDate = String((input && input.produceDate) || '').trim()
+	const identityDate = String((input && input.identityDate) || '').trim()
 	const expireDate = String((input && input.expireDate) || '').trim()
 
 	if (!batchNo) {
@@ -458,11 +469,20 @@ export function validateBaseInfo(input) {
 	if (!produceDate) {
 		issues.push(issue('PRODUCE_DATE_REQUIRED', 'produceDate', '生产日期必填。'))
 	}
+	if (requireIdentityDate && !identityDate) {
+		issues.push(issue('IDENTITY_DATE_REQUIRED', 'identityDate', '标识日期必填。'))
+	}
 	if (!expireDate) {
 		issues.push(issue('EXPIRE_DATE_REQUIRED', 'expireDate', '有效期必填。'))
 	}
-	if (produceDate && expireDate && expireDate <= produceDate) {
-		issues.push(issue('EXPIRE_NOT_AFTER_PRODUCE', 'expireDate', '有效期必须大于生产日期。'))
+	// 有效期比较锚点：填了标识日期就比标识日期（新口径），否则退回生产日期（老批次兼容）
+	const anchor = identityDate || produceDate
+	if (anchor && expireDate && expireDate <= anchor) {
+		issues.push(
+			identityDate
+				? issue('EXPIRE_NOT_AFTER_IDENTITY', 'expireDate', '有效期必须大于标识日期。')
+				: issue('EXPIRE_NOT_AFTER_PRODUCE', 'expireDate', '有效期必须大于生产日期。')
+		)
 	}
 	return issues
 }
@@ -601,6 +621,8 @@ export function createDraft(input) {
 		status: LOCAL_STATUS.DRAFT,
 		batchNo: String((input && input.batchNo) || '').trim(),
 		produceDate: String((input && input.produceDate) || '').trim(),
+		// 标识日期：只存本机、不导出（XML 只有 madeDate / validateDate 两个日期位）
+		identityDate: String((input && input.identityDate) || '').trim(),
 		expireDate: String((input && input.expireDate) || '').trim(),
 		boxes: [],
 		history: { undo: [], redo: [] },
@@ -616,13 +638,15 @@ export function updateBaseInfo(batch, input) {
 	if (batch.status !== LOCAL_STATUS.DRAFT) {
 		return { batch, event: eventOf(EVENT.WRONG_STATE, `批次已进入「${STATUS_LABELS[batch.status]}」，基础信息只读。`) }
 	}
-	const issues = validateBaseInfo(input)
+	// 老批次（从来没有标识日期）不强制补填；已经填过的批次不允许清空
+	const issues = validateBaseInfo(input, { requireIdentityDate: !!batch.identityDate })
 	if (issues.length) {
 		return { batch, issues, event: eventOf(EVENT.WRONG_STATE, issues[0].message) }
 	}
 	const next = clone(batch)
 	next.batchNo = String(input.batchNo).trim()
 	next.produceDate = String(input.produceDate).trim()
+	next.identityDate = String((input.identityDate || '')).trim()
 	next.expireDate = String(input.expireDate).trim()
 	return { batch: touch(next), issues: [] }
 }
@@ -1236,6 +1260,171 @@ export function replaceSlot(batch, boxIndex, canIndex, slotIndex, newCode) {
 		batch: touch(next),
 		event: eventOf(EVENT.OK, `箱 ${Number(boxIndex) + 1} 罐 ${Number(canIndex) + 1} 槽位 ${slotIndex + 1} 已替换为 ${code}。`)
 	}
+}
+
+/**
+ * 手动补录取：把粒子码写进**指定槽位**（空槽也允许）。
+ *
+ * 与 `replaceSlot` 的分工：
+ *   - `replaceSlot` = 改「已经填过」的槽位；空槽位它按设计拒绝（提示"直接扫描即可"）；
+ *   - `fillSlot`    = 往「空槽位」补录（现场漏扫、标签破损、图库辅助人工读数走这条）。
+ * 两者都复用 `findUsage` 做**全批次去重**，校验口径与三条扫码通道完全一致；
+ * 持久化结构（boxes/cans/particles）一个字没动。
+ */
+export function fillSlot(batch, boxIndex, canIndex, slotIndex, newCode) {
+	const code = cleanLayerCode(newCode, 1)
+	const can = findCan(batch, Number(boxIndex) + 1, Number(canIndex) + 1)
+	if (!can) return { batch, event: eventOf(EVENT.WRONG_STATE, '该罐不存在。') }
+	const issue = describeCodeIssue(code, 1)
+	if (issue) {
+		return { batch, event: eventOf(EVENT.WRONG_LAYER, issue) }
+	}
+	const index = Number(slotIndex)
+	if (!Number.isInteger(index) || index < 0 || index >= (can.particles || []).length) {
+		return { batch, event: eventOf(EVENT.WRONG_STATE, '该槽位不存在。') }
+	}
+	if (can.particles[index] === code) {
+		return { batch, event: eventOf(EVENT.OK, '与现有条码相同，无需重复补录。') }
+	}
+	const used = findUsage(batch, code, 1)
+	if (used) {
+		return { batch, event: eventOf(EVENT.DUPLICATE_CODE, `条码 ${code} 已被使用于「${used.where}」。`) }
+	}
+	const from = can.particles[index] || ''
+	const next = clone(batch)
+	next.boxes[boxIndex].cans[canIndex].particles[index] = code
+	if (from) {
+		pushOperation(next, { type: 'replace', boxIndex, canIndex, slotIndex: index, from, to: code })
+	} else {
+		pushOperation(next, { type: 'fill', boxIndex, canIndex, entries: [{ index, code }] })
+	}
+	return {
+		batch: touch(next),
+		event: eventOf(
+			EVENT.OK,
+			from
+				? `箱 ${Number(boxIndex) + 1} 罐 ${Number(canIndex) + 1} 槽位 ${index + 1} 已替换为 ${code}。`
+				: `箱 ${Number(boxIndex) + 1} 罐 ${Number(canIndex) + 1} 槽位 ${index + 1} 已补录 ${code}。`
+		)
+	}
+}
+
+/**
+ * 批量手动录入（手动粘贴 / 图库辅助人工读数**共用这一个入口**）。
+ *
+ * 与 `applyCodes` 的关键差别（2026-10-02 拍板）：
+ *   `applyCodes` 走扫码通道，一次"帧"里超出就**整帧拒绝**（防误读帧写成半截数据）；
+ *   这里是操作员**主动粘贴**，意图明确，所以改成「能填的先填，超出的明确列出来」，
+ *   绝不静默丢弃，也不动计划粒子数。
+ *
+ * @param {object} batch
+ * @param {string[]} codes 已标准化的 20 位粒子码（调用方先用 particleInput 解析）
+ * @returns {{batch: object, event: object, result: object}}
+ *   result = { written, overflow, duplicates, invalid, remaining }
+ */
+export function fillParticleCodesIntoEmptySlots(batch, codes) {
+	const list = (Array.isArray(codes) ? codes : [codes]).map((item) => String(item == null ? '' : item).trim())
+	const wizard = deriveWizard(batch)
+	const can = findCan(batch, wizard.boxIndex, wizard.canIndex)
+	if (!can) return { batch, event: eventOf(EVENT.WRONG_STATE, '当前没有可写入的罐。'), result: emptyBatchFillResult() }
+
+	const invalid = []
+	const duplicates = []
+	const accepted = []
+	const seen = {}
+	list.filter((item) => item !== '').forEach((code) => {
+		const issue = describeCodeIssue(code, 1)
+		if (issue) {
+			invalid.push({ code, message: issue })
+			return
+		}
+		if (seen[code]) {
+			duplicates.push({ code, where: '本次输入' })
+			return
+		}
+		seen[code] = true
+		const used = findUsage(batch, code, 1)
+		if (used) {
+			duplicates.push({ code, where: used.where })
+			return
+		}
+		accepted.push(code)
+	})
+
+	const filled = filledCount(can)
+	const remaining = Math.max(0, can.plannedParticleCount - filled)
+
+	// 相位不对时也要分清原因：罐满了（相位已经推进到"本罐核对"）要说"已满"，
+	// 而不是笼统的"当前步骤不接受录入" —— 操作员看到的提示必须能指导下一步动作。
+	if (wizard.phase !== PHASE.PARTICLE) {
+		if (remaining === 0) {
+			return {
+				batch,
+				event: eventOf(
+					EVENT.OVERFLOW,
+					`当前罐已满（${filled}/${can.plannedParticleCount}），请先确认本罐或进入下一罐再录入。`
+				),
+				result: { written: [], overflow: accepted, duplicates, invalid, remaining: 0 }
+			}
+		}
+		return {
+			batch,
+			event: eventOf(EVENT.WRONG_STATE, `当前步骤是「${wizard.prompt}」，不接受粒子码批量录入。`),
+			result: emptyBatchFillResult()
+		}
+	}
+
+	const written = accepted.slice(0, remaining)
+	const overflow = accepted.slice(remaining)
+
+	if (!written.length) {
+		const reasons = []
+		if (duplicates.length) reasons.push(`${duplicates.length} 个已存在`)
+		if (invalid.length) reasons.push(`${invalid.length} 个格式无效`)
+		if (overflow.length && !remaining) reasons.push('当前罐已满')
+		return {
+			batch,
+			event: eventOf(
+				invalid.length && !duplicates.length && !accepted.length ? EVENT.WRONG_LAYER : EVENT.DUPLICATE_CODE,
+				`没有可写入的粒子码${reasons.length ? `（${reasons.join('，')}）` : ''}。`
+			),
+			result: { written: [], overflow, duplicates, invalid, remaining }
+		}
+	}
+
+	const next = clone(batch)
+	const target = next.boxes[wizard.boxIndex - 1].cans[wizard.canIndex - 1]
+	const entries = []
+	written.forEach((code) => {
+		let emptyIndex = target.particles.indexOf('')
+		if (emptyIndex < 0) {
+			target.particles.push(code)
+			emptyIndex = target.particles.length - 1
+		} else {
+			target.particles[emptyIndex] = code
+		}
+		entries.push({ index: emptyIndex, code })
+	})
+	pushOperation(next, { type: 'fill', boxIndex: wizard.boxIndex - 1, canIndex: wizard.canIndex - 1, entries })
+
+	const after = filledCount(target)
+	const segments = [`本次写入 ${written.length} 粒`]
+	if (duplicates.length) segments.push(`重复 ${duplicates.length} 条`)
+	if (invalid.length) segments.push(`无效 ${invalid.length} 条`)
+	if (overflow.length) segments.push(`超出计划 ${overflow.length} 条未写入`)
+	const where = `箱 ${wizard.boxIndex} 罐 ${wizard.canIndex}`
+	return {
+		batch: touch(next),
+		event: eventOf(
+			EVENT.OK,
+			`${where} ${segments.join('，')}；进度 ${after}/${target.plannedParticleCount}。`
+		),
+		result: { written, overflow, duplicates, invalid, remaining }
+	}
+}
+
+function emptyBatchFillResult() {
+	return { written: [], overflow: [], duplicates: [], invalid: [], remaining: 0 }
 }
 
 /** 删除槽位（置空，位置保留 —— 顺序与缺漏位置都还能看出来）。 */

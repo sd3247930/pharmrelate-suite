@@ -1,0 +1,112 @@
+/**
+ * PharmRelate 离线 OCR —— Android 实现（ML Kit text-recognition:16.0.1，bundled）
+ *
+ * ⚠️ 本文件是**源码骨架**：按业务方 2026-10-02 的拍板，编译/打包由业务方在
+ *    HBuilderX 里完成（自定义基座必须用 private\签名证书 的 keystore）。
+ *    本机没有 DCloud 离线打包 SDK，也没有编译过这份 UTS，**未经过编译与真机验证**。
+ *
+ * 设计要点：
+ *   - 只做「图片 → 文本块」，不做任何业务判断（前缀/去重/槽位全在 JS 层）；
+ *   - 模型随 APK 提供（com.google.mlkit = bundled，不依赖 Google Play 服务，断网可用）；
+ *   - 识别器**只初始化一次**（懒加载 + 复用），避免每次识别都加载模型；
+ *   - content:// 与本地路径都支持（file:// 用 Uri.fromFile 转换）；
+ *   - 失败不抛异常，统一返回 { success:false, code, message }。
+ */
+
+import TextRecognition from 'com.google.mlkit.vision.text.TextRecognition'
+import TextRecognizerOptions from 'com.google.mlkit.vision.text.latin.TextRecognizerOptions'
+import InputImage from 'com.google.mlkit.vision.common.InputImage'
+import Uri from 'android.net.Uri'
+import File from 'java.io.File'
+
+import { OCRBlock, OCRResult, OCRImageOptions } from '../interface.uts'
+
+/**
+ * 识别器实例（懒加载复用）。
+ * 用 `any | null` 而不是具体类，避免 UTS 在类型收窄上挑剔。
+ */
+let recognizer: any | null = null
+
+function getRecognizer(): any {
+  if (recognizer == null) {
+    recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+  }
+  return recognizer
+}
+
+/** 把 imagePath 转成 ML Kit 能吃的 Uri：content:// 原样用，本地路径转 file uri。 */
+function toUri(imagePath: string): Uri {
+  if (imagePath.startsWith('content://')) {
+    return Uri.parse(imagePath)
+  }
+  // 去掉可能的 file:// 前缀后按本地文件处理
+  let path = imagePath
+  if (path.startsWith('file://')) {
+    path = path.substring('file://'.length)
+  }
+  return Uri.fromFile(new File(path))
+}
+
+function failure(code: string, message: string): OCRResult {
+  return {
+    success: false,
+    blocks: [] as OCRBlock[],
+    rawText: '',
+    code,
+    message
+  }
+}
+
+/**
+ * 识别本地图片。
+ *
+ * 失败码：
+ *   OCR_NO_PATH      没有传路径
+ *   OCR_DECODE_FAIL  图片读不出来（路径不对/权限不足/文件损坏）
+ *   OCR_FAILED       ML Kit 处理失败
+ */
+export function recognizeImage(options: OCRImageOptions): Promise<OCRResult> {
+  return new Promise<OCRResult>((resolve) => {
+    const imagePath = options?.imagePath ?? ''
+    if (imagePath == '') {
+      resolve(failure('OCR_NO_PATH', '没有拿到图片路径。'))
+      return
+    }
+
+    let image: InputImage
+    try {
+      // InputImage.fromFilePath 同时支持 content:// 与 file://，
+      // 且由 ML Kit 自己做下采样，避免大图 OOM（不自己 BitmapFactory 解码整张图）
+      image = InputImage.fromFilePath(UTSAndroid.getAppContext(), toUri(imagePath))
+    } catch (error) {
+      resolve(failure('OCR_DECODE_FAIL', '图片读取失败：' + (error?.message ?? '')))
+      return
+    }
+
+    getRecognizer()
+      .process(image)
+      .addOnSuccessListener((text: any) => {
+        const blocks: OCRBlock[] = []
+        const textBlocks = text.getTextBlocks()
+        for (let index = 0; index < textBlocks.size; index++) {
+          const block = textBlocks.get(index)
+          const box = block.getBoundingBox()
+          blocks.push({
+            text: block.getText() as string,
+            left: box?.left ?? 0,
+            top: box?.top ?? 0,
+            right: box?.right ?? 0,
+            bottom: box?.bottom ?? 0
+          } as OCRBlock)
+        }
+        resolve({
+          success: true,
+          blocks,
+          rawText: text.getText() as string
+        } as OCRResult)
+      })
+      .addOnFailureListener((error: any) => {
+        resolve(failure('OCR_FAILED', 'OCR 识别失败：' + (error?.message ?? '')))
+      })
+  })
+}
