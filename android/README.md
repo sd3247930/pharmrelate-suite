@@ -1,4 +1,4 @@
-# 籽关通 Android 采集端（uni-app）· v1.4.5
+# 籽关通 Android 采集端（uni-app）· v1.4.6
 
 > 路线：HBuilderX + uni-app（**不是 Capacitor**）
 > 状态：**多箱包装结构 · 本地驱动 · 引导式 · 离线可用 · 箱号扫条码 / 罐号扫二维码**
@@ -765,6 +765,45 @@ H5 / 真机端到端脚本与截图在
 - [x] 逐枚耗时采集：记录每枚**成功入库**的时间戳，收工时连同 `intervalMs` 数组落盘
       `pharmrelate.batchscan.lastRun`，压测脚本用 `--read-only` 直接读出来出报告
 - [ ] 防抖放宽到 2.5 秒后的真机复跑（54 枚标签，目标：业务重复 <10 次、无丢码、平均间隔 ≤5 秒）
+
+### OCR 候选行操作列几何统一与顶部对齐（v1.4.6，2026-10-02）
+
+**症状**：候选行右侧「有效 / 本次重复 / 无效」徽标与「删除」按钮**不在同一水平线**（按钮明显偏低），
+而且两者高度、字号、圆角、内边距都不一致，整列看着参差。**纯 CSS 问题，逻辑一行没动。**
+
+**根因（真机实测）**：
+
+| 项 | 徽标 `.badge` | 删除按钮 `.ocr-del`（改前） |
+| --- | --- | --- |
+| `rect.top` | 67.71 | **73.63（低 5.92px）** |
+| `height` | 23.71 | 19.53 |
+| `font-size` | 12px | 10.53px |
+| `border-radius` | 999px | 5px |
+| `padding` | 2px 10px | 0 7.66px |
+| `margin` | 0 | **7.66px 0 0 4.79px** |
+
+1. **偏移真凶**：`button.ghost { margin-top: 16rpx }` 在样式表后面声明，优先级 (0,1,1) 高于
+   `.ocr-del` (0,1,0)，把 `.ocr-del { margin: 0 }` 吃掉 → 按钮被顶下去 6px。
+2. **单位陷阱**：设备 dpr=3.5 会把边框吸附到整数物理像素（`1px`→0.857px、`1rpx`→0.286px），
+   用 rpx 去对齐 px 定义的 `.badge` 永远差一档 → **必须用 px**。
+3. **双边框**：`uni-button` 自带 `::after` 边框（实测 0.857px），不关掉会和 `border` 叠成双线。
+4. 父容器 `.ocr-row` 实测是 `align-items: center`（不是默认 `stretch`）。
+
+- [x] `.ocr-row` 的 `align-items` 改为 `flex-start`；`.ocr-index` / `.ocr-code` 补 `line-height: 24px`
+      （= 胶囊高度），单行时序号与码文字和右侧胶囊齐平
+- [x] 新增 `.ocr-row button.ocr-del`：`padding: 2px 10px` / `font-size: 12px` / `line-height: 1.5` /
+      `border: 1px solid #d3dae0` / `border-radius: 999px` / `margin: 0 0 0 8px` —— 与 `.badge` 同款胶囊，
+      只换中性灰配色；选择器带 `.ocr-row` 提权压过 `button.ghost`
+- [x] 新增 `.ocr-row button.ocr-del::after { border: none }` 去掉第二层边框
+- [x] `.badge` 本身一个字没改（颜色/几何都保持原样），覆盖只在 `.ocr-row` 作用域内
+- [x] 已删除态只改颜色（灰字灰底），几何与普通态完全一致
+- [x] 真机几何验收：**顶部差 0.00px、高度差 0.00px、字号/圆角/内边距/线宽全部相等**
+      （`几何-改前.json` vs `几何-改后.json` + `compare-geometry.mjs` 10 项全过）
+- [x] 真机状态色回归：有效 `#15803d` / 批次内已存在 `#b45309` / 无效 `#b91c1c` / 已删除 `#909399`
+      四态颜色都在，且四态下徽标与按钮几何都一致（16 项断言全过）
+- [x] 删除功能回归 26 项全过（变灰 + 删除线 + 计数 9→8 + 被删码不写入槽位）
+- [x] 单测 **746 项全过**（本次不改逻辑）；`check-uniapp.ps1` 通过
+- [x] 证据：`private/测试输出/Android-v1.4.6-OCR候选操作列对齐-20261002/操作列对齐修复说明.md`
 
 ### OCR 候选列表删除修复 + 视图层状态同步（v1.4.5，2026-10-02）
 

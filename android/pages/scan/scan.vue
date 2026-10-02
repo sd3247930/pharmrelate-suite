@@ -2508,7 +2508,8 @@ export default {
 
 .ocr-row {
 	display: flex;
-	align-items: center;
+	/* 顶部对齐：徽标与删除按钮的上边缘必须落在同一水平线（见 .ocr-row button.ocr-del 注释） */
+	align-items: flex-start;
 	padding: 12rpx 16rpx;
 	border-bottom: 1rpx solid #e8eff2;
 }
@@ -2541,20 +2542,47 @@ export default {
 	width: 44rpx;
 	color: #8697a3;
 	font-size: 24rpx;
+	/* 与下面的 .ocr-code 同一个行高，单行时序号/码文字与右侧胶囊视觉齐平（24px = 胶囊高度） */
+	line-height: 24px;
 }
 
 .ocr-code {
 	flex: 1;
 	font-size: 24rpx;
+	line-height: 24px;
 	margin-right: 10rpx;
 }
 
-.ocr-del {
-	margin: 0 0 0 10rpx;
-	padding: 0 16rpx;
-	font-size: 22rpx;
-	line-height: 1.8;
-	background: #ffffff;
+/*
+	候选行右侧操作列：删除按钮与「有效 / 本次重复 / 无效 / 已删除」徽标**同款几何**
+	（同高、同内边距、同圆角、同字号、同线宽），只把颜色换成中性灰做视觉区分。
+
+	三个必须踩准的点（与 .batch-scan-head button.batch-scan-sound 是同一套教训）：
+	  1. uni-app 的 <button> 自带 padding / line-height / margin auto，必须逐项覆盖；
+	  2. 页面上另有 `button.ghost { margin-top: 16rpx }`，优先级 (0,1,1) 高于 .ocr-del (0,1,0)，
+	     会把这个按钮顶下去 6px —— 所以选择器带 .ocr-row 提权（.ocr-row button.ocr-del = 0,2,1）；
+	  3. uni-button 自带一层 ::after 边框，不关掉会和 border 叠成双线。
+
+	另外**必须用 px**：设备 dpr=3.5 会把边框吸附到整数物理像素（1px→0.857px、1rpx→0.286px），
+	用 rpx 去对齐 px 定义的 .badge 永远差一档。
+*/
+.ocr-row button.ocr-del {
+	display: inline-block;
+	margin: 0 0 0 8px; /* 覆盖 button.ghost 的 margin-top: 16rpx */
+	padding: 2px 10px; /* 与 .badge 一致 */
+	border: 1px solid #d3dae0;
+	border-radius: 999px; /* 胶囊，与 .badge 一致 */
+	background: #ffffff; /* 中性色，保留与徽标的视觉区分 */
+	color: #475569;
+	font-size: 12px; /* 与 .badge 一致 */
+	line-height: 1.5; /* 与 .badge 一致 */
+	min-height: 0;
+	height: auto;
+	box-sizing: border-box;
+}
+
+.ocr-row button.ocr-del::after {
+	border: none;
 }
 
 .box-group {
