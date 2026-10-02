@@ -158,6 +158,85 @@ export function barcodeResultsToBlocks(codes) {
 /** 同一"行"的判定容差（OCR 坐标是图片像素）：top 差小于它就当作同一行，按 left 排序。 */
 export const OCR_ROW_TOLERANCE = 24
 
+/** 候选列表里"已删除"行的展示口径（视图层与单测共用同一份常量）。 */
+export const OCR_ROW_DELETED_STATUS = '已删除'
+export const OCR_ROW_DELETED_BADGE = 'badge-deleted'
+
+/**
+ * 候选行构造（纯函数）：把 `parseOcrParticleCandidates()` 的四类结果摊平成列表行。
+ *
+ * **必须传 `deletedMap`**：已删除的行保留在列表里（可追溯、删错能靠"重新识别"找回），
+ * 但状态改成「已删除」、徽标换成灰色，并且 `deleted: true` —— 视图层据此加删除线、
+ * 禁用删除按钮，`selectFillableOcrCodes()` 据此把它排除在"可填入"之外。
+ *
+ * 行 key 与四类结果的顺序绑定（有效/本次重复/批次内已存在/无效），删除判断按 key 做，
+ * 所以同一枚码删掉后再识别也不会串行。
+ *
+ * @param {object|null} parsed `parseOcrParticleCandidates()` 的返回值
+ * @param {object} deletedMap `{ [rowKey]: true }`，由操作员点「删除」累积
+ * @returns {Array<{key,kind,index,code,input,status,badge,deleted}>}
+ */
+export function buildOcrCandidateRows(parsed, deletedMap) {
+	const deleted = deletedMap && typeof deletedMap === 'object' ? deletedMap : {}
+	const rows = []
+	if (!parsed) return rows
+	const push = (row) => {
+		const isDeleted = deleted[row.key] === true
+		rows.push(
+			Object.assign({}, row, {
+				index: rows.length + 1,
+				deleted: isDeleted,
+				status: isDeleted ? OCR_ROW_DELETED_STATUS : row.status,
+				badge: isDeleted ? OCR_ROW_DELETED_BADGE : row.badge
+			})
+		)
+	}
+	;(parsed.valid || []).forEach((item) => {
+		push({ kind: 'valid', key: `v-${item.code}`, code: item.code, input: item.input, status: '有效', badge: 'badge-ok' })
+	})
+	;(parsed.duplicateInInput || []).forEach((item) => {
+		push({
+			kind: 'dup-input',
+			key: `i-${item.code}`,
+			code: item.code,
+			input: item.input,
+			status: '本次重复',
+			badge: 'badge-warn'
+		})
+	})
+	;(parsed.duplicateInCurrentBatch || []).forEach((item) => {
+		push({
+			kind: 'dup-batch',
+			key: `b-${item.code}`,
+			code: item.code,
+			input: item.input,
+			status: '批次内已存在',
+			badge: 'badge-warn'
+		})
+	})
+	;(parsed.invalid || []).forEach((item, index) => {
+		push({
+			kind: 'invalid',
+			key: `x-${index}-${item.input}`,
+			code: '',
+			input: item.input,
+			status: '无效',
+			badge: 'badge-error'
+		})
+	})
+	return rows
+}
+
+/**
+ * 可确认填入的码（纯函数）：只取"有效且没被操作员删掉"的行。
+ * 这是「确认有效码并填入（N）」按钮的数字来源，也是唯一的写入数据源。
+ */
+export function selectFillableOcrCodes(rows) {
+	return (Array.isArray(rows) ? rows : [])
+		.filter((row) => row && row.kind === 'valid' && !row.deleted)
+		.map((row) => row.code)
+}
+
 /**
  * 按位置排序 OCR 文本块。
  *

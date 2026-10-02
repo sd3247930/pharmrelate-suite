@@ -337,12 +337,17 @@
 						<text :class="['badge', ocrBadgeClass]">{{ ocrStatusLabel }}</text>
 					</view>
 					<text v-if="ocrMessage" class="hint">{{ ocrMessage }}</text>
+					<text v-if="deletedOcrCount" class="hint hint-deleted">
+						已手动删除 {{ deletedOcrCount }} 条（不计入填入，可用「重新识别」找回）
+					</text>
 					<view v-if="ocrListRows.length" class="ocr-list">
-						<view v-for="row in ocrListRows" :key="row.key" class="ocr-row">
+						<view v-for="row in ocrListRows" :key="row.key" :class="['ocr-row', { 'is-deleted': row.deleted }]">
 							<text class="ocr-index">{{ row.index }}</text>
 							<text class="ocr-code code">{{ row.code || row.input }}</text>
 							<text :class="['badge', row.badge]">{{ row.status }}</text>
-							<button class="ghost ocr-del" @click="removeOcrCandidate(row)">删除</button>
+							<button class="ghost ocr-del" :disabled="row.deleted" @click="removeOcrCandidate(row)">
+								{{ row.deleted ? '已删除' : '删除' }}
+							</button>
 						</view>
 					</view>
 					<view v-if="ocrListRows.length" class="actions">
@@ -413,9 +418,11 @@ import {
 	PARTICLE_PREFIX,
 	PARTICLE_SHORT_LENGTH,
 	barcodeResultsToBlocks,
+	buildOcrCandidateRows,
 	normalizeParticleCode,
 	parseOcrParticleCandidates,
 	parseParticleBatch,
+	selectFillableOcrCodes,
 	summarizeBatchParse
 } from '../../services/particleInput'
 import { recognizeImage } from '../../services/ocr'
@@ -633,28 +640,16 @@ export default {
 			},
 			/** 候选列表（有效 / 本次重复 / 批次内已存在 / 无效 四类一起列出来）。 */
 			ocrListRows() {
-				const parsed = this.ocrCandidates
-				if (!parsed) return []
-				const rows = []
-				parsed.valid.forEach((item) => {
-					rows.push({ kind: 'valid', key: `v-${item.code}`, index: rows.length + 1, code: item.code, input: item.input, status: '有效', badge: 'badge-ok' })
-				})
-				parsed.duplicateInInput.forEach((item) => {
-					rows.push({ kind: 'dup-input', key: `i-${item.code}`, index: rows.length + 1, code: item.code, input: item.input, status: '本次重复', badge: 'badge-warn' })
-				})
-				parsed.duplicateInCurrentBatch.forEach((item) => {
-					rows.push({ kind: 'dup-batch', key: `b-${item.code}`, index: rows.length + 1, code: item.code, input: item.input, status: '批次内已存在', badge: 'badge-warn' })
-				})
-				parsed.invalid.forEach((item, index) => {
-					rows.push({ kind: 'invalid', key: `x-${index}-${item.input}`, index: rows.length + 1, code: '', input: item.input, status: '无效', badge: 'badge-error' })
-				})
-				return rows
+				// 必须把 ocrDeleted 一起传进去：视图层要随删除实时变灰（纯函数见 services/particleInput.js）
+				return buildOcrCandidateRows(this.ocrCandidates, this.ocrDeleted)
 			},
 			/** 当前可填入的有效码（排除操作员手动删掉的）。 */
 			ocrFillableCodes() {
-				return this.ocrListRows
-					.filter((row) => row.kind === 'valid' && !this.ocrDeleted[row.key])
-					.map((row) => row.code)
+				return selectFillableOcrCodes(this.ocrListRows)
+			},
+			/** 已手动删除的条数（状态行提示用）。 */
+			deletedOcrCount() {
+				return this.ocrListRows.filter((row) => row.deleted).length
 			},
 			photoTitle() {
 				if (!this.photo) return ''
@@ -1887,9 +1882,11 @@ export default {
 		},
 
 		removeOcrCandidate(row) {
-			const next = Object.assign({}, this.ocrDeleted)
-			next[row.key] = true
-			this.ocrDeleted = next
+			if (!row || !row.key) return
+			// 幂等：已删除的行再点一次不做任何事（按钮本身也会被 disabled）
+			if (this.ocrDeleted[row.key]) return
+			// 不可变替换：整对象换新引用，computed 才会重算（视图随删除实时更新）
+			this.ocrDeleted = Object.assign({}, this.ocrDeleted, { [row.key]: true })
 		},
 
 		clearOcrCandidates(message) {
@@ -1901,7 +1898,8 @@ export default {
 
 		/** 确认有效码 → 走唯一的批量写入出口（严禁 OCR 直接写槽位）。 */
 		submitOcrCandidates() {
-			const codes = this.ocrFillableCodes
+			// 双保险：入口再按 deleted 过滤一次（数据源与视图同源，被删的码绝不写入）
+			const codes = selectFillableOcrCodes(this.ocrListRows)
 			if (!codes.length) {
 				uni.showToast({ title: '没有可填入的有效码', icon: 'none' })
 				return
@@ -2517,6 +2515,26 @@ export default {
 
 .ocr-row:last-child {
 	border-bottom: none;
+}
+
+/* 已删除的候选：整行浅灰 + 删除线，按钮变「已删除」并 disabled（保留可追溯） */
+.ocr-row.is-deleted {
+	background: #fafafa;
+}
+
+.ocr-row.is-deleted .ocr-index,
+.ocr-row.is-deleted .ocr-code {
+	color: #909399;
+	text-decoration: line-through;
+}
+
+.ocr-row.is-deleted .ocr-del {
+	color: #b9bfc6;
+	background: #f4f4f5;
+}
+
+.hint-deleted {
+	color: #909399;
 }
 
 .ocr-index {

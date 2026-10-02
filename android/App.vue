@@ -58,6 +58,13 @@ page {
 	border-color: #d3dae0;
 }
 
+/* 已删除（OCR 候选被操作员手动删掉）：灰底灰字，配合行内删除线 */
+.badge-deleted {
+	color: #909399;
+	background: #f4f4f5;
+	border-color: #dcdfe6;
+}
+
 .code {
 	font-family: Consolas, Menlo, monospace;
 	/* 20 位追溯码在窄屏上折行，不被裁切 */

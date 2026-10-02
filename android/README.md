@@ -1,4 +1,4 @@
-# 籽关通 Android 采集端（uni-app）· v1.4.4
+# 籽关通 Android 采集端（uni-app）· v1.4.5
 
 > 路线：HBuilderX + uni-app（**不是 Capacitor**）
 > 状态：**多箱包装结构 · 本地驱动 · 引导式 · 离线可用 · 箱号扫条码 / 罐号扫二维码**
@@ -765,6 +765,32 @@ H5 / 真机端到端脚本与截图在
 - [x] 逐枚耗时采集：记录每枚**成功入库**的时间戳，收工时连同 `intervalMs` 数组落盘
       `pharmrelate.batchscan.lastRun`，压测脚本用 `--read-only` 直接读出来出报告
 - [ ] 防抖放宽到 2.5 秒后的真机复跑（54 枚标签，目标：业务重复 <10 次、无丢码、平均间隔 ≤5 秒）
+
+### OCR 候选列表删除修复 + 视图层状态同步（v1.4.5，2026-10-02）
+
+**症状**：图库识别出候选后点「删除」看着没反应 —— 行还在、还是绿色「有效」。
+
+**根因**：纯显示层 bug。`ocrListRows` 这个 computed 只从 `ocrCandidates` 派生、**没读 `ocrDeleted`**；
+而 `ocrFillableCodes` 读了。所以"计数会从 9 变 8、列表却纹丝不动"。数据层一直是对的，
+被删的码本来就不会写进槽位（真机取证：按钮 `（9）→（8）`，槽位里没有被删的码）。
+
+- [x] 抽纯函数到 `services/particleInput.js`：`buildOcrCandidateRows(parsed, deletedMap)` +
+      `selectFillableOcrCodes(rows)`；页面只负责调用（业务规则留在 JS 服务层）
+- [x] `ocrListRows` 改为 `buildOcrCandidateRows(this.ocrCandidates, this.ocrDeleted)` ← **修复核心**
+- [x] `ocrFillableCodes` 改为 `selectFillableOcrCodes(this.ocrListRows)`（与视图同源）
+- [x] `removeOcrCandidate` 保持不可变替换 + 补**幂等保护**（已删过的直接 return）
+- [x] 已删除条目**保留在列表**（可追溯，删错用「重新识别」找回）：行底 `#fafafa`、
+      序号与码文字 `#909399` + `line-through`、徽标换 `badge-deleted`（`App.vue` 新增）、
+      按钮变「已删除」且 disabled
+- [x] 状态行追加「已手动删除 N 条（不计入填入，可用「重新识别」找回）」，复位后自动消失
+- [x] `submitOcrCandidates()` 入口再过滤一次 `deleted`（双保险）；为空 Toast「没有可填入的有效码」
+- [x] 「重新识别 / 清空识别结果」会把删除态一起复位
+- [x] 单测新增 `tests/ocrCandidateRows.test.mjs`（46 项）：删 1 条 / 删重复项 / 删光 / 幂等 /
+      清空复位 / key 不串行 / 空入参不抛错。全量 **746 项全过**；`check-uniapp.ps1` 通过
+- [x] 真机 26 项断言全过（荣耀 BKQ-AN90）：删除后第 1 行立刻变灰 + 删除线 + 按钮 disabled、
+      计数 9→8、确认填入后被删码未写入槽位、连点幂等无异常、全删后按钮 disabled
+- [x] 证据：`private/测试输出/Android-v1.4.5-OCR候选删除修复-20261002/修复说明-OCR候选删除.md`
+      （4 张截图 + `device-delete-check.mjs` 复现脚本）
 
 ### 条码解码迁移至 renderjs 视图层（v1.4.4，2026-10-02）
 
