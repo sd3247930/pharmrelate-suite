@@ -2,12 +2,12 @@
     "_comment":  "由 scripts/publish-apk.ps1 在发布 Release 时自动回写，不要手改；页面读不到它时会退回 HTML 里的静态文案。",
     "name":  "PharmRelate-Multi-Capture.apk",
     "released":  true,
-    "tag":  "v1.4.1",
-    "versionName":  "1.4.1",
-    "versionCode":  141,
-    "sizeBytes":  17330059,
-    "sha256":  "2b9e4b21ec3762e94957f31d1d7dfdf8a01ae501747753ac37ae5a52c7709318",
-    "releasedAt":  "2026-09-30",
+    "tag":  "v1.4.6",
+    "versionName":  "1.4.6",
+    "versionCode":  146,
+    "sizeBytes":  17769857,
+    "sha256":  "4c938512321e124ca65dde5a6e37bf7c14a3f13efadea989c9e46c0a4d005ac0",
+    "releasedAt":  "2026-10-02",
     "packageName":  "com.pharmrelate.multi.capture",
     "downloadUrl":  "https://github.com/sd3247930/pharmrelate-suite/releases/latest/download/PharmRelate-Multi-Capture.apk"
 }
